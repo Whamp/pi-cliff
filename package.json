@@ -1,0 +1,46 @@
+{
+  "name": "pi-cliff",
+  "version": "0.1.0",
+  "description": "Pi extension that replaces compaction summaries with CliffCompaction's mechanical, no-model summary",
+  "keywords": [
+    "pi-extension",
+    "pi-package",
+    "compaction",
+    "context"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "src/",
+    "docs/design.md",
+    "LICENSE",
+    "NOTICE.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "@types/node": "^24.0.0",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.73.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.0.18"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  }
+}
