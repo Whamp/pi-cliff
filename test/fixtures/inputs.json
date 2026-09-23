@@ -799,6 +799,45 @@
       ]
     },
     {
+      "name": "tool_result_text_blocks_join_one_observation",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_result_text",
+      "note": "An observation's text blocks are joined with newlines into one result, and the join is stripped at the ends, so blank blocks do not add blank lines. pi's tool results carry the same block list.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t0", "name": "read", "args": { "path": "src/app.ts" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [
+            { "type": "text", "text": "first line" },
+            { "type": "text", "text": "second line" },
+            { "type": "text", "text": "third line" }
+          ]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t1", "name": "read", "args": { "path": "src/other.ts" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [
+            { "type": "text", "text": "" },
+            { "type": "text", "text": "   " },
+            { "type": "text", "text": "only real line" }
+          ]
+        }
+      ]
+    },
+    {
       "name": "result_cap_boundary_at_small_limit",
       "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_user",
       "note": "The comparison is len(text) <= result_max_chars, so exactly limit survives and limit+1 is dropped whole.",
