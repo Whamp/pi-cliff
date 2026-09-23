@@ -1,0 +1,1171 @@
+{
+  "$comment": [
+    "Single source of truth for the fidelity fixtures. scripts/gen-fixtures.py turns each case's",
+    "content blocks into Anthropic-dialect message dicts, calls upstream CliffCompaction compact()",
+    "with keep_recent forced to 0 so every turn is summarised, and writes the resulting summary text",
+    "to test/fixtures/expected.json. test/cliff.test.ts turns the same case into SummaryUnit values,",
+    "renders them with src/cliff.ts, and compares the assembled text byte for byte.",
+    "",
+    "keep_recent is not represented here: pi owns the cut, so the harness compacts everything and",
+    "compares only the summarised region. The leading human and system messages are upstream's verbatim",
+    "head and are excluded from the comparison, which is what renderSummary's separate headSection is for.",
+    "",
+    "A text value is either a string or {\"$repeat\": [\"X\", 3000]}, which both readers expand the same way,",
+    "so long strings stay readable in this file. Escape sequences are JSON's own, so a control character",
+    "here is the real character on both sides.",
+    "",
+    "config is what upstream compacts with. renderConfig, when present, is what test/cliff.test.ts",
+    "renders with, and profile (default \"manual\") is the profile it renders under: the two overflow",
+    "cases pin that a configured policy plus the overflow profile equals the lean policy upstream ran."
+  ],
+  "cases": [
+    {
+      "name": "basic_session_folds_every_turn",
+      "mirrors": "tests/test_cliff.py::test_basic_structure_anthropic",
+      "note": "Upstream's a_session layout: a task, then alternating fat and thin tool results.",
+      "config": {},
+      "messages": [
+        {
+          "role": "human",
+          "blocks": [{ "type": "text", "text": "Fix the failing test in repo X." }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "Step 0: I will inspect module 0 to find the bug." },
+            {
+              "type": "toolCall",
+              "id": "tu_0",
+              "name": "bash",
+              "args": { "command": "pytest tests/test_0.py -x" }
+            }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "tu_0",
+          "content": [{ "type": "text", "text": { "$repeat": ["X", 3000] } }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "Step 1: I will inspect module 1 to find the bug." },
+            {
+              "type": "toolCall",
+              "id": "tu_1",
+              "name": "bash",
+              "args": { "command": "pytest tests/test_1.py -x" }
+            }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "tu_1",
+          "content": [{ "type": "text", "text": "test_1 passed (short output)" }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "Step 2: I will inspect module 2 to find the bug." },
+            {
+              "type": "toolCall",
+              "id": "tu_2",
+              "name": "bash",
+              "args": { "command": "pytest tests/test_2.py -x" }
+            }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "tu_2",
+          "content": [{ "type": "text", "text": { "$repeat": ["X", 3000] } }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "Step 3: I will inspect module 3 to find the bug." },
+            {
+              "type": "toolCall",
+              "id": "tu_3",
+              "name": "bash",
+              "args": { "command": "pytest tests/test_3.py -x" }
+            }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "tu_3",
+          "content": [{ "type": "text", "text": "test_3 passed (short output)" }]
+        }
+      ]
+    },
+    {
+      "name": "long_results_dropped_short_kept",
+      "mirrors": "tests/test_cliff.py::test_long_results_dropped_short_kept",
+      "config": {},
+      "messages": [
+        {
+          "role": "human",
+          "blocks": [{ "type": "text", "text": "Fix the failing test in repo X." }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "toolCall",
+              "id": "tu_0",
+              "name": "bash",
+              "args": { "command": "pytest tests/test_0.py -x" }
+            }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "tu_0",
+          "content": [{ "type": "text", "text": { "$repeat": ["X", 3000] } }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "toolCall",
+              "id": "tu_1",
+              "name": "bash",
+              "args": { "command": "pytest tests/test_1.py -x" }
+            }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "tu_1",
+          "content": [{ "type": "text", "text": "test_1 passed (short output)" }]
+        }
+      ]
+    },
+    {
+      "name": "tool_signature_truncated_to_cmd_cap",
+      "mirrors": "tests/test_cliff.py::test_tool_signatures_present_and_truncated",
+      "note": "Upstream runs this one with cmd_max_chars=20, so the ellipsis lands mid-JSON.",
+      "config": { "cmdMaxChars": 20 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "toolCall",
+              "id": "t0",
+              "name": "bash",
+              "args": { "command": "pytest tests/test_0.py -x" }
+            }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "toolCall",
+              "id": "t1",
+              "name": "bash",
+              "args": { "command": "pytest tests/test_1.py -x" }
+            }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t2", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t2", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "namespaced_tool_call_signatures",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_assistant",
+      "note": "pi carries a tool namespace separately; upstream only ever sees one flat name, so the harness flattens namespace.name on both sides and pins the joined form.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "toolCall",
+              "id": "c0",
+              "name": "search",
+              "namespace": "github",
+              "args": { "query": "cliff" }
+            },
+            { "type": "toolCall", "id": "c1", "name": "read", "args": { "path": "src/app.ts" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "c0",
+          "content": [{ "type": "text", "text": "3 hits" }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "c1",
+          "content": [{ "type": "text", "text": "file body" }]
+        }
+      ]
+    },
+    {
+      "name": "assistant_text_kept_in_full_by_default",
+      "mirrors": "tests/test_cliff.py::test_assistant_text_full_by_default",
+      "note": "thoughtMaxChars 0 means unlimited, so a 400-character wall of text survives untouched.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": { "$repeat": ["T", 400] } },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "assistant", "blocks": [{ "type": "text", "text": "done" }] },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "bye" }] }
+      ]
+    },
+    {
+      "name": "assistant_text_capped_with_ellipsis",
+      "mirrors": "tests/test_cliff.py::test_assistant_text_capped_when_configured",
+      "config": { "thoughtMaxChars": 300 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": { "$repeat": ["T", 400] } },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "assistant", "blocks": [{ "type": "text", "text": "done" }] },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "bye" }] }
+      ]
+    },
+    {
+      "name": "assistant_text_blocks_join_before_one_cap",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_assistant",
+      "note": "Two text blocks of one assistant message join with a newline before a single cap, so the second block can be cut off entirely. Human blocks behave the opposite way; see the next case.",
+      "config": { "thoughtMaxChars": 12 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "first observation" },
+            { "type": "text", "text": "second observation" }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "assistant", "blocks": [{ "type": "text", "text": "next" }] },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "human_text_kept_verbatim",
+      "mirrors": "tests/test_cliff.py::test_human_text_kept_verbatim",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "human",
+          "blocks": [
+            {
+              "type": "text",
+              "text": "IMPORTANT: use the staging database, never prod. Keep the migration idempotent and re-runnable, because the deploy job retries it. Never edit the production schema by hand, and never run the reset script outside a sandbox."
+            }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "human_text_blocks_capped_individually",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_user",
+      "note": "Each human text block is its own part with its own cap, so the second block is not starved by the first.",
+      "config": { "humanMaxChars": 10 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "human",
+          "blocks": [
+            { "type": "text", "text": "aaaaaaaaaaaaaaaaaaaa" },
+            { "type": "text", "text": "bbbbbbbbbbbbbbbbbbbb" }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "mixed_tool_result_and_human_text",
+      "mirrors": "tests/test_cliff.py::test_mixed_message_human_text_and_tool_result",
+      "note": "Upstream mixes both blocks in one user message; pi always separates them, and upstream folds each block the same way either way, so the summary text is identical.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 0" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": { "$repeat": ["Z", 5000] } }]
+        },
+        {
+          "role": "human",
+          "blocks": [{ "type": "text", "text": "actually, stop and use branch dev-2" }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 2" },
+            { "type": "toolCall", "id": "t2", "name": "bash", "args": { "command": "id" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t2", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "thinking_kept_as_text",
+      "mirrors": "tests/test_cliff.py::test_thinking_kept_as_text_in_summary",
+      "note": "The thinking block's signature is provider metadata and must never reach the summary.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "thinking",
+              "text": "The mock is not reset between cases, that is the real bug."
+            },
+            { "type": "text", "text": "step 0 visible text" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "assistant", "blocks": [{ "type": "text", "text": "step 2" }] },
+        { "role": "toolResult", "toolUseId": "t2", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "thought_cap_leaves_thinking_full",
+      "mirrors": "tests/test_cliff.py::test_thinking_cap_independent_of_thought_cap",
+      "note": "Config A of the upstream test: the thought cap bites, the thinking cap is unlimited.",
+      "config": { "thoughtMaxChars": 10 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "thinking",
+              "text": "The mock is not reset between cases, that is the real bug."
+            },
+            { "type": "text", "text": "step 0 visible text" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "thinking_cap_leaves_text_full",
+      "mirrors": "tests/test_cliff.py::test_thinking_cap_independent_of_thought_cap",
+      "note": "Config B of the same upstream test: the thinking cap bites, the thought cap is unlimited.",
+      "config": { "thinkingMaxChars": 12 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "thinking",
+              "text": "The mock is not reset between cases, that is the real bug."
+            },
+            { "type": "text", "text": "step 0 visible text" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "thinking_dropped_when_keep_thinking_false",
+      "mirrors": "tests/test_cliff.py::test_thinking_droppable",
+      "config": { "keepThinking": false },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "thinking",
+              "text": "The mock is not reset between cases, that is the real bug."
+            },
+            { "type": "text", "text": "step 0 visible text" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "redacted_thinking_contributes_nothing",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_assistant",
+      "note": "An encrypted thinking block has no foldable text; its opaque payload must not leak.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "redactedThinking", "data": "ENCRYPTED-BLOB-DO-NOT-LEAK" },
+            { "type": "text", "text": "visible text after a redacted block" }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "redactedThinking", "data": "SECOND-ENCRYPTED-BLOB" }]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "speaker_tags_on_every_part",
+      "mirrors": "tests/test_cliff.py::test_speaker_tags_in_summary",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "Step 0: inspecting" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": "test_1 passed" }]
+        },
+        { "role": "human", "blocks": [{ "type": "text", "text": "please target the dev branch" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "Step 1: inspecting" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "task_notifications_stripped_from_human_text",
+      "mirrors": "tests/test_cliff.py::test_task_notifications_stripped_from_summary",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 0" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "human",
+          "blocks": [
+            {
+              "type": "text",
+              "text": "<task-notification>\n<task-id>abc</task-id>\n<result>XPLACEHOLDERX</result>\n</task-notification>\nalso: please use the dev branch"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] },
+        { "role": "assistant", "blocks": [{ "type": "text", "text": "step 2" }] },
+        { "role": "toolResult", "toolUseId": "t2", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "notification_only_message_contributes_nothing",
+      "mirrors": "tests/test_cliff.py::test_task_notifications_stripped_from_summary",
+      "note": "The variant at the end of the upstream test: a message that is nothing but a notification folds to no part at all.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 0" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "human",
+          "blocks": [
+            {
+              "type": "text",
+              "text": "<task-notification>\n<task-id>abc</task-id>\n<result>XPLACEHOLDERX</result>\n</task-notification>\n"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "task_notifications_kept_in_system_directive",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::summarize_message",
+      "note": "Only human text is stripped of task notifications. An injected directive keeps its markup, because its exact wording is the instruction.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "system",
+          "blocks": [
+            { "type": "text", "text": "directive: read <task-notification> before editing" }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "images_dropped_text_sibling_kept",
+      "mirrors": "tests/test_cliff.py::test_images_dropped_from_summary",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 0" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "human",
+          "blocks": [
+            { "type": "image", "data": "AAAA", "mimeType": "image/png" },
+            { "type": "text", "text": "see the screenshot" }
+          ]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [
+            { "type": "text", "text": "ok" },
+            { "type": "image", "data": "BBBB", "mimeType": "image/png" }
+          ]
+        },
+        { "role": "assistant", "blocks": [{ "type": "text", "text": "step 2" }] },
+        { "role": "toolResult", "toolUseId": "t2", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "previous_summary_contributes_nothing",
+      "mirrors": "tests/test_cliff.py::test_recompaction_stays_flat",
+      "note": "A summary written by an earlier cycle is dropped, never merged forward. The payload text stands in for an older action part and must not survive.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "previousSummary",
+          "text": "assistant: Step 0 of the older cycle\n\n---\n\nresult: older output"
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "Step 10" },
+            { "type": "toolCall", "id": "tu_10", "name": "bash", "args": { "command": "cmd 10" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "tu_10",
+          "content": [{ "type": "text", "text": "K output" }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "Step 11" },
+            { "type": "toolCall", "id": "tu_11", "name": "bash", "args": { "command": "cmd 11" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "tu_11",
+          "content": [{ "type": "text", "text": "K output" }]
+        }
+      ]
+    },
+    {
+      "name": "system_directive_folds_and_empty_directive_vanishes",
+      "mirrors": "tests/test_cliff.py::test_system_message_in_tail_and_directive_only_dropped",
+      "note": "Both halves of the upstream test: a directive with text folds as an instruction, a directive with no content vanishes.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 0" },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "make 0" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": { "$repeat": ["R", 1500] } }]
+        },
+        { "role": "system", "blocks": [{ "type": "text", "text": "directive: be careful" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 1" },
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "make 1" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [{ "type": "text", "text": { "$repeat": ["R", 1500] } }]
+        },
+        { "role": "system", "blocks": [] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "step 2" },
+            { "type": "toolCall", "id": "t2", "name": "bash", "args": { "command": "make 2" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t2",
+          "content": [{ "type": "text", "text": { "$repeat": ["R", 1500] } }]
+        }
+      ]
+    },
+    {
+      "name": "empty_tool_results_dropped",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_user",
+      "note": "Empty and whitespace-only observations are dropped rather than rendering a bare `result:` tag.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "true" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "echo" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [{ "type": "text", "text": "  \n\t " }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t2", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t2",
+          "content": [{ "type": "text", "text": "/srv/app" }]
+        }
+      ]
+    },
+    {
+      "name": "result_cap_boundary_at_small_limit",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_user",
+      "note": "The comparison is len(text) <= result_max_chars, so exactly limit survives and limit+1 is dropped whole.",
+      "config": { "resultMaxChars": 5 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "a" } }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": "abcd" }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "b" } }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [{ "type": "text", "text": "abcde" }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "toolCall", "id": "t2", "name": "bash", "args": { "command": "c" } }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t2",
+          "content": [{ "type": "text", "text": "abcdef" }]
+        }
+      ]
+    },
+    {
+      "name": "result_cap_boundary_at_default_limit",
+      "mirrors": "tests/test_cliff.py::test_long_results_dropped_short_kept",
+      "note": "The same boundary at upstream's default 500 characters, at 499, 500, and 501.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "a" } }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": { "$repeat": ["a", 499] } }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "b" } }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [{ "type": "text", "text": { "$repeat": ["b", 500] } }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "toolCall", "id": "t2", "name": "bash", "args": { "command": "c" } }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t2",
+          "content": [{ "type": "text", "text": { "$repeat": ["c", 501] } }]
+        }
+      ]
+    },
+    {
+      "name": "astral_text_cap_counts_code_points",
+      "mirrors": "src/cliffcompaction/dialects/base.py::truncate",
+      "note": "Twelve astral characters are 12 characters to Python and 24 UTF-16 units to JavaScript, so a cap of 8 must keep 8 emoji, not 4.",
+      "config": { "humanMaxChars": 8 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        { "role": "human", "blocks": [{ "type": "text", "text": "😀😁😂😃😄😅😆😇😈😉😊😋" }] },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "astral_result_cap_counts_code_points",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_user",
+      "note": "The drop test is a length test too: 6 astral characters pass a cap of 6 although they occupy 12 UTF-16 units.",
+      "config": { "resultMaxChars": 6 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": "😀😁😂😃😄😅" }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [{ "type": "text", "text": "😀😁😂😃😄😅😆" }]
+        }
+      ]
+    },
+    {
+      "name": "canonical_json_key_order_and_nesting",
+      "mirrors": "src/cliffcompaction/hashing.py::canonical_json",
+      "note": "Keys sort by code point, so the astral key sorts after U+FFEE even though a UTF-16 comparison puts it first. Nested objects sort too; separators carry no spaces; non-ASCII stays unescaped.",
+      "config": { "cmdMaxChars": 0 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "toolCall",
+              "id": "t0",
+              "name": "write",
+              "args": {
+                "zeta": 1,
+                "alpha": { "nested": { "b": true, "a": null }, "list": [1, "two", [3], {}] },
+                "\u00e9t\u00e9": "caf\u00e9",
+                "\uffee": "private use",
+                "😀": "astral key",
+                "10": "numeric-ish key",
+                "2": "numeric-ish key"
+              }
+            }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": "written" }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "toolCall", "id": "t1", "name": "write", "args": {} }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [{ "type": "text", "text": "written" }]
+        }
+      ]
+    },
+    {
+      "name": "canonical_json_number_formats",
+      "mirrors": "src/cliffcompaction/hashing.py::canonical_json",
+      "note": "Keys are zero-padded so sorted order is the order below. Integral values are integers on both sides and fractional ones take Python's fixed or exponent form. A float literal that happens to be integral, such as 3.0, 9007199254740991.5 or 1.0e+16, is the one class this port cannot render the upstream way, so no case here uses one. n12 is the widest literal that stays fractional on both sides.",
+      "config": { "cmdMaxChars": 0 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "toolCall",
+              "id": "t0",
+              "name": "compute",
+              "args": {
+                "n00": 0,
+                "n01": 1,
+                "n02": -7,
+                "n03": 42,
+                "n04": 9007199254740991,
+                "n05": 100000000000000000,
+                "n06": 0.1,
+                "n07": 0.2,
+                "n08": 0.30000000000000004,
+                "n09": 0.3333333333333333,
+                "n10": 1.5,
+                "n11": -0.5,
+                "n12": 4503599627370495.5,
+                "n13": 0.0001,
+                "n14": 0.001,
+                "n15": 1e-5,
+                "n16": 1.5e-7,
+                "n17": 1e-16,
+                "n18": 2.5e-10,
+                "n19": 1234567890.123,
+                "n20": 12345.6789,
+                "n21": 5e-324
+              }
+            }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "done" }] }
+      ]
+    },
+    {
+      "name": "canonical_json_string_escapes",
+      "mirrors": "src/cliffcompaction/hashing.py::canonical_json",
+      "note": "Python escapes only the quote, the backslash, and U+0000-U+001F, naming five of them and using lowercase hex for the rest. U+007F, U+0085, and U+2028 stay raw, and so does text that JavaScript would have escaped.",
+      "config": { "cmdMaxChars": 0 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            {
+              "type": "toolCall",
+              "id": "t0",
+              "name": "write",
+              "args": {
+                "quote": "say \"hi\"",
+                "backslash": "C:\\tmp",
+                "named": "\b\t\n\f\r",
+                "controls": "\u0000\u0001\u000b\u000e\u001f",
+                "del": "\u007f",
+                "nel": "\u0085",
+                "line_separator": "\u2028\u2029",
+                "non_ascii": "\u4e2d\u6587 😀 \u00e9"
+              }
+            }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": "written" }]
+        }
+      ]
+    },
+    {
+      "name": "python_whitespace_stripped_from_human_text",
+      "mirrors": "src/cliffcompaction/dialects/anthropic.py::_summarize_user",
+      "note": "Python strips U+001C-U+001F and U+0085, which String.prototype.trim leaves alone, and strips U+00A0 on both sides. Interior whitespace stays.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "ls" } }
+          ]
+        },
+        {
+          "role": "human",
+          "blocks": [
+            { "type": "text", "text": "\u001c\u0085\u00a0  lead and trail  \u001f\u0085\u00a0" }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t0", "content": [{ "type": "text", "text": "ok" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "toolCall", "id": "t1", "name": "bash", "args": { "command": "pwd" } }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "header_only_when_no_part_survives",
+      "mirrors": "src/cliffcompaction/cliff.py::compact",
+      "note": "Every observation is too long, the one human message is only a notification, and every assistant message holds only unremarkable content, so the summary is the header alone.",
+      "config": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [{ "type": "image", "data": "AAAA", "mimeType": "image/png" }]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": { "$repeat": ["R", 900] } }]
+        },
+        {
+          "role": "human",
+          "blocks": [
+            {
+              "type": "text",
+              "text": "<task-notification>\n<task-id>abc</task-id>\n</task-notification>"
+            }
+          ]
+        },
+        { "role": "assistant", "blocks": [{ "type": "thinking", "text": "" }] },
+        {
+          "role": "toolResult",
+          "toolUseId": "t1",
+          "content": [{ "type": "text", "text": { "$repeat": ["R", 900] } }]
+        },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "text", "text": "   " },
+            { "type": "redactedThinking", "data": "ENCRYPTED" }
+          ]
+        },
+        { "role": "toolResult", "toolUseId": "t2", "content": [{ "type": "text", "text": "   " }] }
+      ]
+    },
+    {
+      "name": "overflow_profile_matches_rung_two_config",
+      "mirrors": "tests/test_escalation.py::test_reactive_ladder_succeeds_at_lower_rung",
+      "note": "Upstream rung 2 is keep_thinking=False plus thought_max_chars=300 for an unlimited config. The profile must produce that from the unmodified config, so this case renders from upstream defaults with profile overflow and compares against a fixture generated with the lean config.",
+      "profile": "overflow",
+      "config": { "keepThinking": false, "thoughtMaxChars": 300 },
+      "renderConfig": {},
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "thinking", "text": "Reasoning that the lean profile must drop entirely." },
+            { "type": "text", "text": { "$repeat": ["y", 400] } },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "make" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": "built" }]
+        },
+        { "role": "assistant", "blocks": [{ "type": "text", "text": "done" }] },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    },
+    {
+      "name": "overflow_profile_keeps_tighter_thought_cap",
+      "mirrors": "src/cliffcompaction/engine.py",
+      "note": "Rung 2 caps at min(configured, 300), so a configured 100 stays 100. The fixture is generated with thought_max_chars=100 and rendered from a configured 100 with the overflow profile, which must keep thinking off and the cap at 100.",
+      "profile": "overflow",
+      "config": { "keepThinking": false, "thoughtMaxChars": 100 },
+      "renderConfig": { "thoughtMaxChars": 100 },
+      "messages": [
+        { "role": "human", "blocks": [{ "type": "text", "text": "task" }] },
+        {
+          "role": "assistant",
+          "blocks": [
+            { "type": "thinking", "text": "Reasoning that the lean profile must drop entirely." },
+            { "type": "text", "text": { "$repeat": ["y", 400] } },
+            { "type": "toolCall", "id": "t0", "name": "bash", "args": { "command": "make" } }
+          ]
+        },
+        {
+          "role": "toolResult",
+          "toolUseId": "t0",
+          "content": [{ "type": "text", "text": "built" }]
+        },
+        { "role": "assistant", "blocks": [{ "type": "text", "text": "done" }] },
+        { "role": "toolResult", "toolUseId": "t1", "content": [{ "type": "text", "text": "ok" }] }
+      ]
+    }
+  ]
+}
