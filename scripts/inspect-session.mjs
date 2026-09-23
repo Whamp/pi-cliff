@@ -32,7 +32,9 @@ const compactions = entries.filter((entry) => entry.type === "compaction");
 const messages = entries.filter((entry) => entry.type === "message");
 const byId = new Map(entries.map((entry) => [entry.id, entry]));
 
-console.log(`entries=${entries.length} messages=${messages.length} compactions=${compactions.length}`);
+console.log(
+  `entries=${entries.length} messages=${messages.length} compactions=${compactions.length}`,
+);
 for (const entry of messages) {
   const message = entry.message ?? {};
   const blocks = Array.isArray(message.content)
@@ -40,7 +42,9 @@ for (const entry of messages) {
     : typeof message.content === "string"
       ? "string"
       : "-";
-  console.log(`  ${message.role ?? entry.role ?? "?"} [${blocks}]${entry.type === "message" ? "" : ` ${entry.type}`}`);
+  console.log(
+    `  ${message.role ?? entry.role ?? "?"} [${blocks}]${entry.type === "message" ? "" : ` ${entry.type}`}`,
+  );
 }
 
 check("at least one compaction entry was written", compactions.length >= 1);
@@ -54,7 +58,11 @@ const summary = String(compaction.summary ?? "");
 const details = compaction.details?.cliff;
 
 check("summary starts with upstream's header", summary.startsWith(SUMMARY_HEADER));
-check("details.cliff is present", details !== undefined, JSON.stringify(details ?? null).slice(0, 200));
+check(
+  "details.cliff is present",
+  details !== undefined,
+  JSON.stringify(details ?? null).slice(0, 200),
+);
 check(
   "summary carries mechanical markers, not prose",
   /^\s*(user|assistant|thinking|result|system):/m.test(summary) || /\n\[.+?\] /m.test(summary),
@@ -70,14 +78,19 @@ if (openingMarker !== undefined) {
 }
 
 const boundary = compaction.firstKeptEntryId;
-check("a kept boundary was recorded", typeof boundary === "string" && boundary.length > 0, String(boundary));
+check(
+  "a kept boundary was recorded",
+  typeof boundary === "string" && boundary.length > 0,
+  String(boundary),
+);
 if (typeof boundary === "string") {
   check("the kept boundary exists on the branch", byId.has(boundary));
 }
 
 // The projected context is the summary followed by the contiguous kept suffix.
 const boundaryIndex = byId.size > 0 ? entries.findIndex((entry) => entry.id === boundary) : -1;
-const kept = boundaryIndex >= 0 ? entries.slice(boundaryIndex).filter((e) => e.type === "message") : [];
+const kept =
+  boundaryIndex >= 0 ? entries.slice(boundaryIndex).filter((e) => e.type === "message") : [];
 const keptRoles = kept.map((entry) => entry.message?.role ?? entry.role);
 console.log(`\nprojected context: [summary] + ${keptRoles.join(",")}`);
 check("the kept suffix is non-empty", kept.length > 0);

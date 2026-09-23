@@ -22,8 +22,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint .",
-    "format": "oxfmt .",
-    "format:check": "oxfmt --check .",
+    "format": "oxfmt --ignore-path .oxfmtignore .",
+    "format:check": "oxfmt --check --ignore-path .oxfmtignore .",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"
   },
   "peerDependencies": {
