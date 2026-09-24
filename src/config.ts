@@ -442,7 +442,22 @@ function describeValue(value: unknown): string {
   if (Array.isArray(value)) {
     return "an array";
   }
-  return String(value);
+  if (typeof value === "object") {
+    return JSON.stringify(value) ?? "an object";
+  }
+  switch (typeof value) {
+    case "number":
+    case "boolean":
+    case "bigint":
+      return `${value}`;
+    case "symbol":
+      return value.description === undefined ? "a symbol" : `Symbol(${value.description})`;
+    case "function":
+      return "a function";
+    case "undefined":
+      return "undefined";
+  }
+  return "an unsupported value";
 }
 
 function describeError(error: unknown): string {

@@ -205,6 +205,11 @@ describe("parseCliffConfig rejects what it cannot honour", () => {
     );
   });
 
+  it("describes an invalid object value as JSON instead of [object Object]", () => {
+    const parsed = parseCliffConfig({ mode: { unexpected: true } });
+    expect(!parsed.ok && parsed.errors[0]).toContain('not {"unexpected":true}');
+  });
+
   it("rejects a document that is not an object, including an array", () => {
     for (const document of [null, 7, "active", ["mode"], true]) {
       const parsed = parseCliffConfig(document);
