@@ -90,7 +90,7 @@ JSON
 cat >"$work/.pi/cliff.json" <<'JSON'
 {
   "mode": "active",
-  "toolResultMaxChars": 500
+  "toolResultMaxTokens": 125
 }
 JSON
 

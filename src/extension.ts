@@ -18,7 +18,13 @@ import {
   type SessionCompactEvent,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { assembleSummary, headRegionEnd, renderSummary, type SummaryUnit } from "./cliff.js";
+import {
+  assembleSummary,
+  headRegionEnd,
+  renderSummary,
+  type SummaryPolicy,
+  type SummaryUnit,
+} from "./cliff.js";
 import {
   CLIFF_CONFIG_FILE_NAME,
   CLIFF_CONFIG_OPTIONS,
@@ -261,7 +267,7 @@ function attemptCliffSummary(event: SessionBeforeCompactEvent, config: CliffConf
 
   let rendered;
   try {
-    rendered = renderSummary(renderUnits, config, event.reason);
+    rendered = renderSummary(renderUnits, toSummaryPolicy(config), event.reason);
   } catch (error) {
     return { ok: false, stage: "render", message: describeError(error) };
   }
@@ -270,6 +276,27 @@ function attemptCliffSummary(event: SessionBeforeCompactEvent, config: CliffConf
     ok: true,
     summary: assembleSummary(rendered.headSection, rendered.actionParts),
     head,
+  };
+}
+
+/** Converts public estimated-token limits to renderer code-point caps at the sole unit boundary. */
+function toSummaryPolicy(config: CliffConfig): SummaryPolicy {
+  return {
+    includeReasoning: config.includeReasoning,
+    assistantTextMaxChars:
+      config.assistantTextMaxTokens === "unlimited"
+        ? "unlimited"
+        : config.assistantTextMaxTokens * 4,
+    reasoningTextMaxChars:
+      config.reasoningTextMaxTokens === "unlimited"
+        ? "unlimited"
+        : config.reasoningTextMaxTokens * 4,
+    toolCallMaxChars:
+      config.toolCallMaxTokens === "unlimited" ? "unlimited" : config.toolCallMaxTokens * 4,
+    toolResultMaxChars:
+      config.toolResultMaxTokens === "unlimited" ? "unlimited" : config.toolResultMaxTokens * 4,
+    userTextMaxChars:
+      config.userTextMaxTokens === "unlimited" ? "unlimited" : config.userTextMaxTokens * 4,
   };
 }
 

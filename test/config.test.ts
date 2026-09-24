@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_SUMMARY_POLICY } from "../src/cliff.js";
+import { DEFAULT_SUMMARY_POLICY, type CharacterLimit } from "../src/cliff.js";
 import {
   CLIFF_CONFIG_FILE_NAME,
   CLIFF_CONFIG_OPTIONS,
@@ -23,6 +23,7 @@ import {
   mergeCliffConfig,
   parseCliffConfig,
   type CliffConfigPaths,
+  type EstimatedTokenLimit,
 } from "../src/config.js";
 
 /** Directories created by the current test, removed after it. */
@@ -55,6 +56,10 @@ async function writeConfigFileWith(path: string, settings: unknown): Promise<str
   return await writeConfigFile(path, JSON.stringify(settings));
 }
 
+function tokenLimitFromRenderer(limit: CharacterLimit): EstimatedTokenLimit {
+  return limit === "unlimited" ? limit : limit / 4;
+}
+
 function paths(globalPath?: string, projectPath?: string): CliffConfigPaths {
   return {
     globalPath: globalPath ?? scratchPath("global", CLIFF_CONFIG_FILE_NAME),
@@ -77,22 +82,35 @@ describe("parseCliffConfig accepts the documented policy", () => {
 
   it("accepts zero and the exact unlimited sentinel for all five limits", () => {
     const parsed = parseCliffConfig({
-      assistantTextMaxChars: 0,
-      reasoningTextMaxChars: "unlimited",
-      toolCallMaxChars: 1,
-      toolResultMaxChars: 0,
-      userTextMaxChars: "unlimited",
+      assistantTextMaxTokens: 0,
+      reasoningTextMaxTokens: "unlimited",
+      toolCallMaxTokens: 1.25,
+      toolResultMaxTokens: 0,
+      userTextMaxTokens: "unlimited",
     });
     expect(parsed).toEqual({
       ok: true,
       settings: {
-        assistantTextMaxChars: 0,
-        reasoningTextMaxChars: "unlimited",
-        toolCallMaxChars: 1,
-        toolResultMaxChars: 0,
-        userTextMaxChars: "unlimited",
+        assistantTextMaxTokens: 0,
+        reasoningTextMaxTokens: "unlimited",
+        toolCallMaxTokens: 1.25,
+        toolResultMaxTokens: 0,
+        userTextMaxTokens: "unlimited",
       },
     });
+  });
+
+  it("keeps zero and unlimited semantics for all five public limits", () => {
+    for (const value of [0, "unlimited"] as const) {
+      const settings = {
+        assistantTextMaxTokens: value,
+        reasoningTextMaxTokens: value,
+        toolCallMaxTokens: value,
+        toolResultMaxTokens: value,
+        userTextMaxTokens: value,
+      };
+      expect(parseCliffConfig(settings)).toEqual({ ok: true, settings });
+    }
   });
 
   it("accepts includeReasoning either way", () => {
@@ -110,11 +128,11 @@ describe("parseCliffConfig accepts the documented policy", () => {
     const document = {
       mode: "shadow",
       includeReasoning: false,
-      assistantTextMaxChars: 11,
-      reasoningTextMaxChars: 12,
-      toolCallMaxChars: 13,
-      toolResultMaxChars: 14,
-      userTextMaxChars: 15,
+      assistantTextMaxTokens: 11,
+      reasoningTextMaxTokens: 12,
+      toolCallMaxTokens: 13,
+      toolResultMaxTokens: 14,
+      userTextMaxTokens: 15,
     };
     const parsed = parseCliffConfig(document);
     expect(parsed).toEqual({ ok: true, settings: document });
@@ -128,14 +146,32 @@ describe("parseCliffConfig accepts the documented policy", () => {
     expect(CLIFF_CONFIG_OPTIONS.map(({ key }) => key)).toEqual([
       "mode",
       "includeReasoning",
-      "assistantTextMaxChars",
-      "reasoningTextMaxChars",
-      "toolCallMaxChars",
-      "toolResultMaxChars",
-      "userTextMaxChars",
+      "assistantTextMaxTokens",
+      "reasoningTextMaxTokens",
+      "toolCallMaxTokens",
+      "toolResultMaxTokens",
+      "userTextMaxTokens",
     ]);
     expect(defaultBlock).toBeDefined();
     expect(JSON.parse(defaultBlock ?? "")).toEqual(DEFAULT_CLIFF_CONFIG);
+    expect(DEFAULT_CLIFF_CONFIG).toEqual({
+      mode: "active",
+      includeReasoning: true,
+      assistantTextMaxTokens: "unlimited",
+      reasoningTextMaxTokens: "unlimited",
+      toolCallMaxTokens: 37.5,
+      toolResultMaxTokens: 125,
+      userTextMaxTokens: 5_000,
+    });
+    expect(DEFAULT_CLIFF_CONFIG.toolCallMaxTokens).toBe(
+      tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.toolCallMaxChars),
+    );
+    expect(DEFAULT_CLIFF_CONFIG.toolResultMaxTokens).toBe(
+      tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.toolResultMaxChars),
+    );
+    expect(DEFAULT_CLIFF_CONFIG.userTextMaxTokens).toBe(
+      tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.userTextMaxChars),
+    );
     expect(help).toContain("Config files: ~/.pi/agent/cliff.json or <project>/.pi/cliff.json");
     expect(help).toContain(
       "Precedence: built-in defaults, then the global file, then the project file.",
@@ -151,8 +187,11 @@ describe("parseCliffConfig accepts the documented policy", () => {
       'When a valid config file selects "off", errors in the other file do not block Pi; /cliff still reports them.',
     );
     expect(help).toContain(
-      "reasoningTextMaxChars: Reasoning text limit per assistant message; ignored when includeReasoning is false.",
+      "reasoningTextMaxTokens: Estimated-token limit for reasoning text per assistant message; ignored when includeReasoning is false.",
     );
+    expect(help).toContain("Unicode code points divided by 4, not tokenizer counts.");
+    expect(help).toContain("exact quarter-token steps");
+    expect(help).toContain("75 estimated tokens");
     expect(help).toContain("Pi owns the compaction trigger, cut, kept tail, and persistence");
   });
 });
@@ -162,7 +201,7 @@ describe("parseCliffConfig rejects unsupported config", () => {
     const unknown = parseCliffConfig({ modee: "active" });
     expect(!unknown.ok && unknown.errors[0]).toContain('unknown key "modee"');
     expect(!unknown.ok && unknown.errors[0]).toContain("includeReasoning");
-    expect(!unknown.ok && unknown.errors[0]).toContain("toolResultMaxChars");
+    expect(!unknown.ok && unknown.errors[0]).toContain("toolResultMaxTokens");
     expect(parseCliffConfig({ Mode: "off" })).toMatchObject({
       ok: false,
       errors: [expect.stringContaining('unknown key "Mode"')],
@@ -170,11 +209,16 @@ describe("parseCliffConfig rejects unsupported config", () => {
 
     const retired = [
       ["keepThinking", "includeReasoning", undefined],
-      ["thoughtMaxChars", "assistantTextMaxChars", 'use "unlimited" to preserve it'],
-      ["thinkingMaxChars", "reasoningTextMaxChars", 'use "unlimited" to preserve it'],
-      ["cmdMaxChars", "toolCallMaxChars", 'use "unlimited" to preserve it'],
-      ["resultMaxChars", "toolResultMaxChars", "still drops every non-empty result"],
-      ["humanMaxChars", "userTextMaxChars", 'use "unlimited" to preserve it'],
+      ["assistantTextMaxChars", "assistantTextMaxTokens", "Divide finite code-point values by 4"],
+      ["thoughtMaxChars", "assistantTextMaxTokens", "legacy 0 meant unlimited"],
+      ["reasoningTextMaxChars", "reasoningTextMaxTokens", "Divide finite code-point values by 4"],
+      ["thinkingMaxChars", "reasoningTextMaxTokens", "legacy 0 meant unlimited"],
+      ["toolCallMaxChars", "toolCallMaxTokens", "Divide finite code-point values by 4"],
+      ["cmdMaxChars", "toolCallMaxTokens", "legacy 0 meant unlimited"],
+      ["toolResultMaxChars", "toolResultMaxTokens", "Divide finite code-point values by 4"],
+      ["resultMaxChars", "toolResultMaxTokens", "legacy 0 still drops every non-empty result"],
+      ["userTextMaxChars", "userTextMaxTokens", "Divide finite code-point values by 4"],
+      ["humanMaxChars", "userTextMaxTokens", "legacy 0 meant unlimited"],
     ] as const;
     for (const [retiredKey, replacement, hint] of retired) {
       const parsed = parseCliffConfig({ [retiredKey]: 0 });
@@ -195,18 +239,20 @@ describe("parseCliffConfig rejects unsupported config", () => {
 
   it("rejects negative, fractional, unsafe, null, and non-exact strings for every limit", () => {
     const limitKeys = [
-      "assistantTextMaxChars",
-      "reasoningTextMaxChars",
-      "toolCallMaxChars",
-      "toolResultMaxChars",
-      "userTextMaxChars",
+      "assistantTextMaxTokens",
+      "reasoningTextMaxTokens",
+      "toolCallMaxTokens",
+      "toolResultMaxTokens",
+      "userTextMaxTokens",
     ] as const;
     const invalidValues: unknown[] = [
       -1,
-      10.5,
-      Number.MAX_SAFE_INTEGER + 1,
+      10.1,
+      Number.MAX_SAFE_INTEGER,
+      (Number.MAX_SAFE_INTEGER + 1) / 4,
       Number.NaN,
       Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
       null,
       "150",
       "Unlimited",
@@ -217,9 +263,34 @@ describe("parseCliffConfig rejects unsupported config", () => {
         expect(!parsed.ok && parsed.errors[0]).toContain(`"${key}"`);
       }
     }
-    expect(parseCliffConfig({ userTextMaxChars: -1 })).toMatchObject({
+    expect(parseCliffConfig({ userTextMaxTokens: -1 })).toMatchObject({
       ok: false,
-      errors: [expect.stringContaining('"userTextMaxChars" must not be negative')],
+      errors: [expect.stringContaining('"userTextMaxTokens" must not be negative')],
+    });
+  });
+
+  it("accepts quarter-token steps including signed zero and the public default limits", () => {
+    expect(
+      parseCliffConfig({
+        assistantTextMaxTokens: -0,
+        reasoningTextMaxTokens: 0.25,
+        toolCallMaxTokens: 37.5,
+        toolResultMaxTokens: 125,
+        userTextMaxTokens: 5_000,
+      }),
+    ).toEqual({
+      ok: true,
+      settings: {
+        assistantTextMaxTokens: -0,
+        reasoningTextMaxTokens: 0.25,
+        toolCallMaxTokens: 37.5,
+        toolResultMaxTokens: 125,
+        userTextMaxTokens: 5_000,
+      },
+    });
+    expect(parseCliffConfig({ assistantTextMaxTokens: 0.1 })).toMatchObject({
+      ok: false,
+      errors: [expect.stringContaining("exact quarter-token steps")],
     });
   });
 
@@ -244,7 +315,7 @@ describe("parseCliffConfig rejects unsupported config", () => {
     const parsed = parseCliffConfig({
       mode: "slow",
       includeReasoning: 1,
-      assistantTextMaxChars: -2,
+      assistantTextMaxTokens: -2,
       unknown: 1,
     });
     expect(parsed).toMatchObject({ ok: false, errors: expect.any(Array) });
@@ -252,7 +323,7 @@ describe("parseCliffConfig rejects unsupported config", () => {
       expect(parsed.errors).toHaveLength(4);
       expect(parsed.errors.join("\n")).toContain('"mode"');
       expect(parsed.errors.join("\n")).toContain('"includeReasoning"');
-      expect(parsed.errors.join("\n")).toContain('"assistantTextMaxChars"');
+      expect(parsed.errors.join("\n")).toContain('"assistantTextMaxTokens"');
       expect(parsed.errors.join("\n")).toContain('unknown key "unknown"');
       expect(parsed.errors.every((error) => error.startsWith("Cliff config:"))).toBe(true);
     }
@@ -260,41 +331,51 @@ describe("parseCliffConfig rejects unsupported config", () => {
 });
 
 describe("mergeCliffConfig", () => {
-  it("returns the named defaults when no layer overrides them", () => {
+  it("returns token defaults derived from the unchanged renderer caps", () => {
     expect(mergeCliffConfig([])).toEqual(DEFAULT_CLIFF_CONFIG);
-    expect(mergeCliffConfig([])).toEqual({ mode: "active", ...DEFAULT_SUMMARY_POLICY });
+    expect(DEFAULT_CLIFF_CONFIG).toEqual({
+      mode: "active",
+      includeReasoning: DEFAULT_SUMMARY_POLICY.includeReasoning,
+      assistantTextMaxTokens: tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.assistantTextMaxChars),
+      reasoningTextMaxTokens: tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.reasoningTextMaxChars),
+      toolCallMaxTokens: tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.toolCallMaxChars),
+      toolResultMaxTokens: tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.toolResultMaxChars),
+      userTextMaxTokens: tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.userTextMaxChars),
+    });
   });
 
   it("applies layers in order, so the project file wins over the global one", () => {
     const resolved = mergeCliffConfig([
-      { toolCallMaxChars: 100 },
-      { toolCallMaxChars: 20, mode: "shadow" },
+      { toolCallMaxTokens: 100 },
+      { toolCallMaxTokens: 20, mode: "shadow" },
     ]);
-    expect(resolved.toolCallMaxChars).toBe(20);
+    expect(resolved.toolCallMaxTokens).toBe(20);
     expect(resolved.mode).toBe("shadow");
   });
 
   it("keeps unnamed values when a layer overrides only one or two keys", () => {
     const resolved = mergeCliffConfig([
-      { toolCallMaxChars: 100, userTextMaxChars: 500 },
+      { toolCallMaxTokens: 100, userTextMaxTokens: 500 },
       { mode: "off" },
     ]);
     expect(resolved).toEqual({
       mode: "off",
       includeReasoning: DEFAULT_SUMMARY_POLICY.includeReasoning,
-      assistantTextMaxChars: DEFAULT_SUMMARY_POLICY.assistantTextMaxChars,
-      reasoningTextMaxChars: DEFAULT_SUMMARY_POLICY.reasoningTextMaxChars,
-      toolCallMaxChars: 100,
-      toolResultMaxChars: DEFAULT_SUMMARY_POLICY.toolResultMaxChars,
-      userTextMaxChars: 500,
+      assistantTextMaxTokens: DEFAULT_SUMMARY_POLICY.assistantTextMaxChars,
+      reasoningTextMaxTokens: DEFAULT_SUMMARY_POLICY.reasoningTextMaxChars,
+      toolCallMaxTokens: 100,
+      toolResultMaxTokens: tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.toolResultMaxChars),
+      userTextMaxTokens: 500,
     });
   });
 
   it("does not mutate the defaults or its layers", () => {
-    const globalSettings = { toolCallMaxChars: 100 };
+    const globalSettings = { toolCallMaxTokens: 100 };
     mergeCliffConfig([globalSettings]);
-    expect(DEFAULT_CLIFF_CONFIG.toolCallMaxChars).toBe(DEFAULT_SUMMARY_POLICY.toolCallMaxChars);
-    expect(globalSettings).toEqual({ toolCallMaxChars: 100 });
+    expect(DEFAULT_CLIFF_CONFIG.toolCallMaxTokens).toBe(
+      tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.toolCallMaxChars),
+    );
+    expect(globalSettings).toEqual({ toolCallMaxTokens: 100 });
   });
 });
 
@@ -321,18 +402,18 @@ describe("loadCliffConfig reads the two files it is handed", () => {
 
   it("lets the project file win key by key and records which file each value came from", async () => {
     const { globalPath, projectPath } = paths();
-    await writeConfigFileWith(globalPath, { toolCallMaxChars: 100, userTextMaxChars: 900 });
-    await writeConfigFileWith(projectPath, { toolCallMaxChars: 20, mode: "off" });
+    await writeConfigFileWith(globalPath, { toolCallMaxTokens: 100, userTextMaxTokens: 900 });
+    await writeConfigFileWith(projectPath, { toolCallMaxTokens: 20, mode: "off" });
     const loaded = loadCliffConfig({ globalPath, projectPath });
     expect(loaded.config).toEqual({
       ...DEFAULT_CLIFF_CONFIG,
       mode: "off",
-      toolCallMaxChars: 20,
-      userTextMaxChars: 900,
+      toolCallMaxTokens: 20,
+      userTextMaxTokens: 900,
     });
     expect(loaded.origins).toEqual([
-      { key: "toolCallMaxChars", path: projectPath },
-      { key: "userTextMaxChars", path: globalPath },
+      { key: "toolCallMaxTokens", path: projectPath },
+      { key: "userTextMaxTokens", path: globalPath },
       { key: "mode", path: projectPath },
     ]);
   });
@@ -360,8 +441,8 @@ describe("loadCliffConfig reads the two files it is handed", () => {
 
   it("reads both files even when the first is broken, so one report lists every mistake", async () => {
     const { globalPath, projectPath } = paths();
-    await writeConfigFileWith(paths().globalPath, { toolCallMaxChars: "wide" });
-    await writeConfigFileWith(projectPath, { userTextMaxChars: -1 });
+    await writeConfigFileWith(paths().globalPath, { toolCallMaxTokens: "wide" });
+    await writeConfigFileWith(projectPath, { userTextMaxTokens: -1 });
     const loaded = loadCliffConfig({ globalPath, projectPath });
     expect(loaded.errors).toHaveLength(2);
     expect(loaded.config).toEqual(DEFAULT_CLIFF_CONFIG);
@@ -372,11 +453,11 @@ describe("loadCliffConfig reads the two files it is handed", () => {
     const documented = `{
   "mode": "active",
   "includeReasoning": true,
-  "assistantTextMaxChars": "unlimited",
-  "reasoningTextMaxChars": "unlimited",
-  "toolCallMaxChars": 150,
-  "toolResultMaxChars": 500,
-  "userTextMaxChars": 20000
+  "assistantTextMaxTokens": "unlimited",
+  "reasoningTextMaxTokens": "unlimited",
+  "toolCallMaxTokens": 37.5,
+  "toolResultMaxTokens": 125,
+  "userTextMaxTokens": 5000
 }
 `;
     await writeConfigFile(globalPath, documented);

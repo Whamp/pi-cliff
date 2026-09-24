@@ -225,8 +225,8 @@ async function runCommand(harness: ReturnType<typeof makeExtension>, args: strin
 }
 
 describe("native compaction hook", () => {
-  it("keeps the lean overflow summary without inferring a fit budget", async () => {
-    const harness = makeExtension();
+  it("keeps overflow's 75-estimated-token equivalent at the existing 300-code-point cap", async () => {
+    const harness = makeExtension({ config: { assistantTextMaxTokens: 75 } });
     const result = await compact(
       harness,
       event({
@@ -249,6 +249,73 @@ describe("native compaction hook", () => {
     expect(compaction.summary).toContain(
       `assistant: ${"ACTION-DETAIL ".repeat(80).slice(0, 300)}...`,
     );
+  });
+
+  it("converts estimated-token settings once to exact code-point renderer caps", async () => {
+    const harness = makeExtension({
+      config: {
+        assistantTextMaxTokens: 37.5,
+        reasoningTextMaxTokens: 1.25,
+        toolCallMaxTokens: 37.5,
+        toolResultMaxTokens: 125,
+        userTextMaxTokens: 5_000,
+      },
+    });
+    const assistantMessage: PiAgentMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "r".repeat(6) },
+        { type: "text", text: "😀".repeat(151) },
+        {
+          type: "toolCall",
+          id: "cap-call",
+          name: "probe",
+          arguments: { value: "😀".repeat(200) },
+        },
+      ],
+      api: "openai-completions",
+      provider: "fixture",
+      model: "fixture",
+      usage: {
+        input: 100,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 101,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: TIMESTAMP,
+    };
+    const shortResult: PiAgentMessage = {
+      role: "toolResult",
+      toolCallId: "cap-call",
+      toolName: "probe",
+      content: [{ type: "text", text: "s".repeat(500) }],
+      isError: false,
+      timestamp: TIMESTAMP,
+    };
+    const longResult: PiAgentMessage = {
+      ...shortResult,
+      content: [{ type: "text", text: "x".repeat(501) }],
+    };
+
+    const result = requireCompaction(
+      await compact(
+        harness,
+        event({ messages: [user("u".repeat(20_001)), assistantMessage, shortResult, longResult] }),
+      ),
+    );
+    const serializedCall = `{"value":"${"😀".repeat(200)}"}`;
+
+    expect(result.summary).toContain(`user: ${"u".repeat(20_000)}...`);
+    expect(result.summary).toContain(`thinking: ${"r".repeat(5)}...`);
+    expect(result.summary).toContain(`assistant: ${"😀".repeat(150)}...`);
+    expect(result.summary).toContain(
+      `[probe] ${Array.from(serializedCall).slice(0, 150).join("")}...`,
+    );
+    expect(result.summary).toContain(`result: ${"s".repeat(500)}`);
+    expect(result.summary).not.toContain("x".repeat(501));
   });
 
   it("restores a valid head when optional historical report stats are absent", async () => {
@@ -421,8 +488,9 @@ describe("/cliff command", () => {
     expect(harness.branchCalls).toBe(0);
     expect(harness.notifyCalls).toHaveLength(1);
     expect(harness.notifyCalls[0]?.message).toContain('"unlimited" disables the limit');
-    expect(harness.notifyCalls[0]?.message).toContain('"toolCallMaxChars"');
-    expect(harness.notifyCalls[0]?.message).toContain('"toolResultMaxChars"');
+    expect(harness.notifyCalls[0]?.message).toContain('"toolCallMaxTokens"');
+    expect(harness.notifyCalls[0]?.message).toContain('"toolResultMaxTokens"');
+    expect(harness.notifyCalls[0]?.message).toContain("Unicode code points divided by 4");
     expect(harness.notifyCalls[0]?.message).toContain("```json");
     expect(harness.notifyCalls[0]?.message).toContain("Precedence: built-in defaults");
   });
@@ -469,9 +537,9 @@ describe("/cliff command", () => {
       expect(loaded.origins).toContainEqual({ key: "mode", path: projectPath });
       expect(loaded.errors).toHaveLength(1);
       expect(loaded.errors[0]).toContain(
-        'retired key "cmdMaxChars"; use "toolCallMaxChars" instead.',
+        'retired key "cmdMaxChars"; use "toolCallMaxTokens" instead.',
       );
-      expect(loaded.errors[0]).toContain('use "unlimited" to preserve it.');
+      expect(loaded.errors[0]).toContain('legacy 0 meant unlimited, so use "unlimited".');
 
       const harness = makeExtension({
         config: loaded.config,
@@ -485,8 +553,8 @@ describe("/cliff command", () => {
       const status = harness.notifyCalls[0]?.message ?? "";
       expect(status).toContain(`mode = off (origin: ${projectPath})`);
       expect(status).toContain(`error: Cliff config ${globalPath}:`);
-      expect(status).toContain('retired key "cmdMaxChars"; use "toolCallMaxChars" instead.');
-      expect(status).toContain('use "unlimited" to preserve it.');
+      expect(status).toContain('retired key "cmdMaxChars"; use "toolCallMaxTokens" instead.');
+      expect(status).toContain('legacy 0 meant unlimited, so use "unlimited".');
       expect(status).toContain("Use /cliff help for settings and a JSON example.");
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -500,16 +568,19 @@ describe("/cliff command", () => {
       config: {
         mode: "shadow",
         includeReasoning: false,
-        assistantTextMaxChars: 0,
-        reasoningTextMaxChars: "unlimited",
-        toolCallMaxChars: 15,
-        toolResultMaxChars: 0,
-        userTextMaxChars: 200,
+        assistantTextMaxTokens: 0,
+        reasoningTextMaxTokens: "unlimited",
+        toolCallMaxTokens: 3.75,
+        toolResultMaxTokens: 0,
+        userTextMaxTokens: 50,
       },
       origins: [
         { key: "mode", path: globalPath },
-        { key: "reasoningTextMaxChars", path: globalPath },
-        { key: "toolCallMaxChars", path: projectPath },
+        { key: "assistantTextMaxTokens", path: globalPath },
+        { key: "reasoningTextMaxTokens", path: globalPath },
+        { key: "toolCallMaxTokens", path: projectPath },
+        { key: "toolResultMaxTokens", path: globalPath },
+        { key: "userTextMaxTokens", path: projectPath },
       ],
       files: [
         { path: globalPath, state: "read" },
@@ -524,11 +595,11 @@ describe("/cliff command", () => {
     const report = harness.notifyCalls[0]?.message ?? "";
     expect(report).toContain(`mode = shadow (origin: ${globalPath})`);
     expect(report).toContain("includeReasoning = false (origin: built-in default)");
-    expect(report).toContain("assistantTextMaxChars = 0 (origin: built-in default)");
-    expect(report).toContain(`reasoningTextMaxChars = unlimited (origin: ${globalPath})`);
-    expect(report).toContain(`toolCallMaxChars = 15 (origin: ${projectPath})`);
-    expect(report).toContain("toolResultMaxChars = 0 (origin: built-in default)");
-    expect(report).toContain("userTextMaxChars = 200 (origin: built-in default)");
+    expect(report).toContain(`assistantTextMaxTokens = 0 (origin: ${globalPath})`);
+    expect(report).toContain(`reasoningTextMaxTokens = unlimited (origin: ${globalPath})`);
+    expect(report).toContain(`toolCallMaxTokens = 3.75 (origin: ${projectPath})`);
+    expect(report).toContain(`toolResultMaxTokens = 0 (origin: ${globalPath})`);
+    expect(report).toContain(`userTextMaxTokens = 50 (origin: ${projectPath})`);
     expect(report).toContain(`file ${globalPath}: read`);
     expect(report).toContain(`file ${projectPath}: read`);
     expect(report).toContain("Last compaction on this branch: none yet");

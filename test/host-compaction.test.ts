@@ -457,11 +457,11 @@ describe("real Pi SDK compaction integration", () => {
         expect(JSON.parse(defaultJson ?? "")).toEqual({
           mode: "active",
           includeReasoning: true,
-          assistantTextMaxChars: "unlimited",
-          reasoningTextMaxChars: "unlimited",
-          toolCallMaxChars: 150,
-          toolResultMaxChars: 500,
-          userTextMaxChars: 20_000,
+          assistantTextMaxTokens: "unlimited",
+          reasoningTextMaxTokens: "unlimited",
+          toolCallMaxTokens: 37.5,
+          toolResultMaxTokens: 125,
+          userTextMaxTokens: 5_000,
         });
         expect(measure(harness)).toEqual(before);
         expect(harness.network.fetch).toEqual([]);
@@ -472,11 +472,20 @@ describe("real Pi SDK compaction integration", () => {
       }
     });
   });
-  it("dispatches /cliff status through Pi with every effective value and origin", async () => {
+  it("dispatches /cliff status through Pi with every effective token value and origin", async () => {
     await withHarness(async (harness) => {
       const projectPath = join(harness.root, `project-${harness.nextProject}`, ".pi", "cliff.json");
       const globalPath = join(harness.agentDir, "cliff.json");
-      const host = await makeSession(harness, { throwingNotify: true });
+      await writeFile(globalPath, JSON.stringify({ reasoningTextMaxTokens: 1.25 }), "utf8");
+      const host = await makeSession(harness, {
+        configText: JSON.stringify({
+          assistantTextMaxTokens: 37.5,
+          toolCallMaxTokens: 12.5,
+          toolResultMaxTokens: 125,
+          userTextMaxTokens: 5_000,
+        }),
+        throwingNotify: true,
+      });
       let output = "";
       const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
         output += String(chunk);
@@ -489,13 +498,13 @@ describe("real Pi SDK compaction integration", () => {
         expect(output).toContain("Cliff configuration:");
         expect(output).toContain("mode = active (origin: built-in default)");
         expect(output).toContain("includeReasoning = true (origin: built-in default)");
-        expect(output).toContain("assistantTextMaxChars = unlimited (origin: built-in default)");
-        expect(output).toContain("reasoningTextMaxChars = unlimited (origin: built-in default)");
-        expect(output).toContain("toolCallMaxChars = 150 (origin: built-in default)");
-        expect(output).toContain("toolResultMaxChars = 500 (origin: built-in default)");
-        expect(output).toContain("userTextMaxChars = 20000 (origin: built-in default)");
-        expect(output).toContain(`file ${globalPath}: absent`);
-        expect(output).toContain(`file ${projectPath}: absent`);
+        expect(output).toContain(`assistantTextMaxTokens = 37.5 (origin: ${projectPath})`);
+        expect(output).toContain(`reasoningTextMaxTokens = 1.25 (origin: ${globalPath})`);
+        expect(output).toContain(`toolCallMaxTokens = 12.5 (origin: ${projectPath})`);
+        expect(output).toContain(`toolResultMaxTokens = 125 (origin: ${projectPath})`);
+        expect(output).toContain(`userTextMaxTokens = 5000 (origin: ${projectPath})`);
+        expect(output).toContain(`file ${globalPath}: read`);
+        expect(output).toContain(`file ${projectPath}: read`);
         expect(output).toContain("Last compaction on this branch: none yet");
         expect(output).toContain("Last Cliff receipt: none on this branch");
         expect(measure(harness)).toEqual(before);
@@ -586,11 +595,11 @@ describe("real Pi SDK compaction integration", () => {
       const host = await makeSession(harness, {
         configText: JSON.stringify({
           includeReasoning: false,
-          assistantTextMaxChars: 0,
-          reasoningTextMaxChars: "unlimited",
-          toolCallMaxChars: 0,
-          toolResultMaxChars: 0,
-          userTextMaxChars: "unlimited",
+          assistantTextMaxTokens: 0,
+          reasoningTextMaxTokens: "unlimited",
+          toolCallMaxTokens: 0,
+          toolResultMaxTokens: 0,
+          userTextMaxTokens: "unlimited",
         }),
       });
       try {

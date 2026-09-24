@@ -12,7 +12,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { DEFAULT_SUMMARY_POLICY, type CharacterLimit, type SummaryPolicy } from "./cliff.js";
 
 /**
  * Who owns the compaction summary.
@@ -23,19 +22,35 @@ import { DEFAULT_SUMMARY_POLICY, type CharacterLimit, type SummaryPolicy } from 
  */
 export type CliffMode = "active" | "shadow" | "off";
 
+/** A per-content estimated-token limit, or the explicit value that disables the limit. */
+export type EstimatedTokenLimit = number | "unlimited";
+
 /**
- * Everything `cliff.json` configures: the mode switch plus the render policy knobs.
+ * Everything `cliff.json` configures: the mode switch plus public estimated-token limits.
  *
- * The policy half is {@link SummaryPolicy} unchanged, so the resolved config is exactly what
- * `renderSummary` takes and there is no second copy of the caps to keep in step.
+ * `src/extension.ts` converts these estimates once, at the renderer boundary, into code-point caps.
  */
-export interface CliffConfig extends SummaryPolicy {
+export interface CliffConfig {
   /** See {@link CliffMode}. */
   mode: CliffMode;
+  includeReasoning: boolean;
+  assistantTextMaxTokens: EstimatedTokenLimit;
+  reasoningTextMaxTokens: EstimatedTokenLimit;
+  toolCallMaxTokens: EstimatedTokenLimit;
+  toolResultMaxTokens: EstimatedTokenLimit;
+  userTextMaxTokens: EstimatedTokenLimit;
 }
 
-/** Rendering defaults that preserve upstream output, with `active` ownership when no file exists. */
-export const DEFAULT_CLIFF_CONFIG: CliffConfig = { mode: "active", ...DEFAULT_SUMMARY_POLICY };
+/** Public defaults derived from the unchanged renderer's code-point caps divided by four. */
+export const DEFAULT_CLIFF_CONFIG: CliffConfig = {
+  mode: "active",
+  includeReasoning: true,
+  assistantTextMaxTokens: "unlimited",
+  reasoningTextMaxTokens: "unlimited",
+  toolCallMaxTokens: 37.5,
+  toolResultMaxTokens: 125,
+  userTextMaxTokens: 5_000,
+};
 
 /** File name Cliff looks for in both directories; deriving the directories is the host glue's job. */
 export const CLIFF_CONFIG_FILE_NAME = "cliff.json";
@@ -49,11 +64,11 @@ export const CLIFF_CONFIG_FILE_NAME = "cliff.json";
 export interface CliffConfigSettings {
   mode?: CliffMode;
   includeReasoning?: boolean;
-  assistantTextMaxChars?: CharacterLimit;
-  reasoningTextMaxChars?: CharacterLimit;
-  toolCallMaxChars?: CharacterLimit;
-  toolResultMaxChars?: CharacterLimit;
-  userTextMaxChars?: CharacterLimit;
+  assistantTextMaxTokens?: EstimatedTokenLimit;
+  reasoningTextMaxTokens?: EstimatedTokenLimit;
+  toolCallMaxTokens?: EstimatedTokenLimit;
+  toolResultMaxTokens?: EstimatedTokenLimit;
+  userTextMaxTokens?: EstimatedTokenLimit;
 }
 
 /** A document that parsed cleanly, carrying only the keys the file actually named. */
@@ -98,11 +113,28 @@ export interface CliffConfigLoad {
 }
 
 /** One documented config key, its command-help meaning, and any retired spelling to diagnose. */
+type RetiredCliffConfigKey =
+  | "keepThinking"
+  | "assistantTextMaxChars"
+  | "thoughtMaxChars"
+  | "reasoningTextMaxChars"
+  | "thinkingMaxChars"
+  | "toolCallMaxChars"
+  | "cmdMaxChars"
+  | "toolResultMaxChars"
+  | "resultMaxChars"
+  | "userTextMaxChars"
+  | "humanMaxChars";
+
+interface RetiredCliffConfigOption {
+  key: RetiredCliffConfigKey;
+  migrationHint?: string;
+}
+
 interface CliffConfigOption<Key extends keyof CliffConfig = keyof CliffConfig> {
   key: Key;
   description: string;
-  retiredKey?: string;
-  migrationHint?: string;
+  retiredKeys?: readonly RetiredCliffConfigOption[];
 }
 
 /**
@@ -116,47 +148,93 @@ export const CLIFF_CONFIG_OPTIONS = [
   {
     key: "includeReasoning",
     description: "Include assistant reasoning text.",
-    retiredKey: "keepThinking",
+    retiredKeys: [{ key: "keepThinking" }],
   },
   {
-    key: "assistantTextMaxChars",
-    description: "Visible assistant text limit per message.",
-    retiredKey: "thoughtMaxChars",
-    migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
+    key: "assistantTextMaxTokens",
+    description: "Estimated-token limit for visible assistant text per message.",
+    retiredKeys: [
+      {
+        key: "assistantTextMaxChars",
+        migrationHint:
+          'Divide finite code-point values by 4; 0 and "unlimited" keep their meanings.',
+      },
+      {
+        key: "thoughtMaxChars",
+        migrationHint: 'Divide finite values by 4; legacy 0 meant unlimited, so use "unlimited".',
+      },
+    ],
   },
   {
-    key: "reasoningTextMaxChars",
+    key: "reasoningTextMaxTokens",
     description:
-      "Reasoning text limit per assistant message; ignored when includeReasoning is false.",
-    retiredKey: "thinkingMaxChars",
-    migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
+      "Estimated-token limit for reasoning text per assistant message; ignored when includeReasoning is false.",
+    retiredKeys: [
+      {
+        key: "reasoningTextMaxChars",
+        migrationHint:
+          'Divide finite code-point values by 4; 0 and "unlimited" keep their meanings.',
+      },
+      {
+        key: "thinkingMaxChars",
+        migrationHint: 'Divide finite values by 4; legacy 0 meant unlimited, so use "unlimited".',
+      },
+    ],
   },
   {
-    key: "toolCallMaxChars",
-    description: "Serialized tool-call argument limit, excluding the [toolName] wrapper.",
-    retiredKey: "cmdMaxChars",
-    migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
+    key: "toolCallMaxTokens",
+    description: "Estimated-token limit for serialized arguments; excludes the [toolName] wrapper.",
+    retiredKeys: [
+      {
+        key: "toolCallMaxChars",
+        migrationHint:
+          'Divide finite code-point values by 4; 0 and "unlimited" keep their meanings.',
+      },
+      {
+        key: "cmdMaxChars",
+        migrationHint: 'Divide finite values by 4; legacy 0 meant unlimited, so use "unlimited".',
+      },
+    ],
   },
   {
-    key: "toolResultMaxChars",
-    description: "Drop tool results whole when they exceed this limit.",
-    retiredKey: "resultMaxChars",
-    migrationHint: "Legacy 0 still drops every non-empty result.",
+    key: "toolResultMaxTokens",
+    description: "Drop tool results whole when they exceed this estimated-token limit.",
+    retiredKeys: [
+      {
+        key: "toolResultMaxChars",
+        migrationHint:
+          'Divide finite code-point values by 4; 0 and "unlimited" keep their meanings.',
+      },
+      {
+        key: "resultMaxChars",
+        migrationHint: "Divide finite values by 4; legacy 0 still drops every non-empty result.",
+      },
+    ],
   },
   {
-    key: "userTextMaxChars",
-    description: "User and system text limit per block, including the carried opening head.",
-    retiredKey: "humanMaxChars",
-    migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
+    key: "userTextMaxTokens",
+    description:
+      "Estimated-token limit for user and system text per block, including the carried opening head.",
+    retiredKeys: [
+      {
+        key: "userTextMaxChars",
+        migrationHint:
+          'Divide finite code-point values by 4; 0 and "unlimited" keep their meanings.',
+      },
+      {
+        key: "humanMaxChars",
+        migrationHint: 'Divide finite values by 4; legacy 0 meant unlimited, so use "unlimited".',
+      },
+    ],
   },
 ] as const satisfies readonly [
   CliffConfigOption<"mode">,
   CliffConfigOption<"includeReasoning">,
-  CliffConfigOption<"assistantTextMaxChars">,
-  CliffConfigOption<"reasoningTextMaxChars">,
-  CliffConfigOption<"toolCallMaxChars">,
-  CliffConfigOption<"toolResultMaxChars">,
-  CliffConfigOption<"userTextMaxChars">,
+  CliffConfigOption<"assistantTextMaxTokens">,
+  CliffConfigOption<"reasoningTextMaxTokens">,
+  CliffConfigOption<"toolCallMaxTokens">,
+  CliffConfigOption<"toolResultMaxTokens">,
+  CliffConfigOption<"userTextMaxTokens">,
 ];
 
 type CliffConfigKey = (typeof CLIFF_CONFIG_OPTIONS)[number]["key"];
@@ -172,8 +250,8 @@ const CLIFF_MODE_VALUES = ["active", "shadow", "off"] as const satisfies readonl
  * downstream works on {@link CliffConfigSettings}. Every problem is collected rather than thrown, so
  * one report names each mistake in the file instead of only the first.
  *
- * Limits accept nonnegative safe integers or the exact `"unlimited"` sentinel. Zero is valid and
- * retains no content in its category; positive tool-result limits drop oversized results whole.
+ * Limits accept finite nonnegative exact quarter-token values whose code-point conversion is safe,
+ * or the exact `"unlimited"` sentinel. Zero retains no category content; oversized tool results drop whole.
  */
 export function parseCliffConfig(document: unknown): CliffConfigParse {
   return parseCliffConfigDocument(document, "");
@@ -201,9 +279,10 @@ export function formatCliffConfigHelp(): string {
     "  shadow: Cliff computes a comparison summary, then Pi calls its model summarizer.",
     "  off: Cliff is disabled; Pi compacts with its model summarizer.",
     'When a valid config file selects "off", errors in the other file do not block Pi; /cliff still reports them.',
-    'Character limits count Unicode code points. A limit of 0 retains no content in that category; "unlimited" disables the limit.',
-    "Zero omits whole tool-call lines and user/system labels. Positive text limits append an ellipsis after the configured number of code points.",
-    "toolCallMaxChars caps serialized arguments, not the [toolName] wrapper; oversized tool results are dropped whole.",
+    "Estimated tokens are approximate: Unicode code points divided by 4, not tokenizer counts. Numeric limits must be finite and nonnegative, use exact quarter-token steps, and convert to a safe code-point cap.",
+    'A limit of 0 retains no content in that category; "unlimited" disables the limit. Positive text limits append "..." after the configured code-point cap.',
+    "Speaker labels, tool signature wrappers, and appended ellipses are outside text payload caps; oversized tool results are dropped whole.",
+    "These per-content limits are not total-context budgets. Overflow keeps the existing internal 300-code-point assistant-text cap (75 estimated tokens), not a provider-fit promise.",
     "Precedence: built-in defaults, then the global file, then the project file.",
     "Pi owns the compaction trigger, cut, kept tail, and persistence; Cliff only renders the summary.",
     "Default cliff.json:",
@@ -231,20 +310,20 @@ export function mergeCliffConfig(layers: readonly CliffConfigSettings[]): CliffC
     if (settings.includeReasoning !== undefined) {
       config.includeReasoning = settings.includeReasoning;
     }
-    if (settings.assistantTextMaxChars !== undefined) {
-      config.assistantTextMaxChars = settings.assistantTextMaxChars;
+    if (settings.assistantTextMaxTokens !== undefined) {
+      config.assistantTextMaxTokens = settings.assistantTextMaxTokens;
     }
-    if (settings.reasoningTextMaxChars !== undefined) {
-      config.reasoningTextMaxChars = settings.reasoningTextMaxChars;
+    if (settings.reasoningTextMaxTokens !== undefined) {
+      config.reasoningTextMaxTokens = settings.reasoningTextMaxTokens;
     }
-    if (settings.toolCallMaxChars !== undefined) {
-      config.toolCallMaxChars = settings.toolCallMaxChars;
+    if (settings.toolCallMaxTokens !== undefined) {
+      config.toolCallMaxTokens = settings.toolCallMaxTokens;
     }
-    if (settings.toolResultMaxChars !== undefined) {
-      config.toolResultMaxChars = settings.toolResultMaxChars;
+    if (settings.toolResultMaxTokens !== undefined) {
+      config.toolResultMaxTokens = settings.toolResultMaxTokens;
     }
-    if (settings.userTextMaxChars !== undefined) {
-      config.userTextMaxChars = settings.userTextMaxChars;
+    if (settings.userTextMaxTokens !== undefined) {
+      config.userTextMaxTokens = settings.userTextMaxTokens;
     }
   }
   return config;
@@ -352,13 +431,18 @@ function parseCliffConfigDocument(document: unknown, label: string): CliffConfig
   const errors: string[] = [];
   for (const key of Object.keys(document)) {
     if (!CLIFF_CONFIG_KEYS.some((known) => known === key)) {
-      const retiredOption = CLIFF_CONFIG_OPTIONS.find(
-        (option) => "retiredKey" in option && option.retiredKey === key,
-      );
+      const retirement = CLIFF_CONFIG_OPTIONS.flatMap((option) =>
+        "retiredKeys" in option ? option.retiredKeys.map((retired) => ({ option, retired })) : [],
+      ).find(({ retired }) => retired.key === key);
       errors.push(
-        retiredOption === undefined
+        retirement === undefined
           ? cliffProblem(label, `unknown key "${key}"; Cliff knows ${CLIFF_CONFIG_KEYS.join(", ")}`)
-          : retiredCliffConfigKeyProblem(key, retiredOption, label),
+          : retiredCliffConfigKeyProblem(
+              key,
+              retirement.option,
+              "migrationHint" in retirement.retired ? retirement.retired.migrationHint : undefined,
+              label,
+            ),
       );
     }
   }
@@ -391,25 +475,25 @@ function readCliffConfigSetting(
       const includeReasoning = readCliffBoolean(key, raw, label, errors);
       return includeReasoning === undefined ? {} : { includeReasoning };
     }
-    case "assistantTextMaxChars": {
-      const cap = readCliffCharacterLimit(key, raw, label, errors);
-      return cap === undefined ? {} : { assistantTextMaxChars: cap };
+    case "assistantTextMaxTokens": {
+      const cap = readCliffTokenLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { assistantTextMaxTokens: cap };
     }
-    case "reasoningTextMaxChars": {
-      const cap = readCliffCharacterLimit(key, raw, label, errors);
-      return cap === undefined ? {} : { reasoningTextMaxChars: cap };
+    case "reasoningTextMaxTokens": {
+      const cap = readCliffTokenLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { reasoningTextMaxTokens: cap };
     }
-    case "toolCallMaxChars": {
-      const cap = readCliffCharacterLimit(key, raw, label, errors);
-      return cap === undefined ? {} : { toolCallMaxChars: cap };
+    case "toolCallMaxTokens": {
+      const cap = readCliffTokenLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { toolCallMaxTokens: cap };
     }
-    case "toolResultMaxChars": {
-      const cap = readCliffCharacterLimit(key, raw, label, errors);
-      return cap === undefined ? {} : { toolResultMaxChars: cap };
+    case "toolResultMaxTokens": {
+      const cap = readCliffTokenLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { toolResultMaxTokens: cap };
     }
-    case "userTextMaxChars": {
-      const cap = readCliffCharacterLimit(key, raw, label, errors);
-      return cap === undefined ? {} : { userTextMaxChars: cap };
+    case "userTextMaxTokens": {
+      const cap = readCliffTokenLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { userTextMaxTokens: cap };
     }
     default: {
       // A documented option without an explicit decoder lands here, which keeps parsing exhaustive.
@@ -445,22 +529,22 @@ function readCliffBoolean(
 }
 
 /**
- * Reads one character limit: a nonnegative safe integer or the exact `unlimited` sentinel.
+ * Reads one estimated-token limit with exact quarter-token and safe code-point precision.
  */
-function readCliffCharacterLimit(
+function readCliffTokenLimit(
   key: string,
   raw: unknown,
   label: string,
   errors: string[],
-): CharacterLimit | undefined {
+): EstimatedTokenLimit | undefined {
   if (raw === "unlimited") {
     return raw;
   }
-  if (typeof raw !== "number" || !Number.isSafeInteger(raw)) {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
     errors.push(
       cliffProblem(
         label,
-        `"${key}" must be a nonnegative safe integer or exact "unlimited", not ${describeValue(raw)}`,
+        `"${key}" must be a finite nonnegative number in exact quarter-token steps or exact "unlimited", not ${describeValue(raw)}`,
       ),
     );
     return undefined;
@@ -469,16 +553,26 @@ function readCliffCharacterLimit(
     errors.push(cliffProblem(label, `"${key}" must not be negative`));
     return undefined;
   }
+  if (!Number.isSafeInteger(raw * 4)) {
+    errors.push(
+      cliffProblem(
+        label,
+        `"${key}" must use exact quarter-token steps and convert to a safe code-point limit`,
+      ),
+    );
+    return undefined;
+  }
   return raw;
 }
 
-/** Gives a retired setting's exact replacement and zero migration guidance. */
+/** Gives a retired setting's exact replacement and unit/zero migration guidance. */
 function retiredCliffConfigKeyProblem(
   key: string,
-  option: CliffConfigOption,
+  option: { key: CliffConfigKey },
+  migrationHint: string | undefined,
   label: string,
 ): string {
-  const migration = option.migrationHint === undefined ? "" : ` ${option.migrationHint}`;
+  const migration = migrationHint === undefined ? "" : ` ${migrationHint}`;
   return cliffProblem(label, `retired key "${key}"; use "${option.key}" instead.${migration}`);
 }
 
