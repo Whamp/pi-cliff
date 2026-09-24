@@ -5,14 +5,12 @@
  * keeps the render table reviewable against upstream without a pi harness, and it is why the
  * conversion lives here rather than making `AgentMessage` the domain type.
  *
- * Every text rule below has the same justification: fold the text pi would have shown the model, so
- * the summary describes the conversation the model actually had. pi's own `convertToLlm` is the
- * source for that text, and `test/pi-units.test.ts` compares this module's output with pi's for every
- * role pi gives us. pi keeps some of those helpers private, so their wording is reproduced here and
- * pinned by those tests rather than trusted.
+ * Every text rule below folds the text pi showed the model. Ordinary content retains its existing
+ * block-sensitive projection; Pi's `convertToLlm` is reused narrowly for bash and branch summaries,
+ * which have no upstream role and must match Pi's user-text formatting exactly.
  */
 
-import type { convertToLlm } from "@earendil-works/pi-coding-agent";
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { CliffJsonValue, SummaryUnit, ToolSignature } from "./cliff.js";
 
 /**
@@ -28,11 +26,6 @@ export type PiAgentMessage = Parameters<typeof convertToLlm>[0][number];
 export class CliffMessageMappingError extends Error {
   override readonly name = "CliffMessageMappingError";
 }
-
-/** pi's framing for a branch summary, which it hands the model as user text. */
-const PI_BRANCH_SUMMARY_PREFIX =
-  "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n";
-const PI_BRANCH_SUMMARY_SUFFIX = "</summary>";
 
 type PiUserMessage = Extract<PiAgentMessage, { role: "user" }>;
 type PiAssistantMessage = Extract<PiAgentMessage, { role: "assistant" }>;
@@ -80,18 +73,13 @@ function unitsForMessage(message: PiAgentMessage): SummaryUnit[] {
     case "system":
       return [{ kind: "system", text: systemText(message) }];
     case "bashExecution":
-      if (message.excludeFromContext) {
-        // `!!` output the user kept out of context. It was never shown to the model, so the summary
-        // has no observation to report, and the count is what makes it visible in the notification.
-        return [{ kind: "omitted", reason: "excludedFromContext" }];
-      }
-      return [{ kind: "result", text: bashExecutionText(message) }];
+      return piCustomTextUnits(message);
     case "custom":
       // An extension-injected message. pi gives it the same content shape as a user message and sends
       // it to the model the same way, so it folds the same way.
       return humanUnits(message.content);
     case "branchSummary":
-      return branchSummaryUnits(message);
+      return piCustomTextUnits(message);
     case "compactionSummary":
       // A summary an earlier cycle wrote. Upstream drops it rather than merging summaries forward, and
       // `preparation.previousSummary` is never read as content either.
@@ -189,36 +177,24 @@ function systemText(message: PiSystemMessage): string {
   return message.content.map((block) => block.text).join("\n");
 }
 
-/**
- * One `human` unit carrying pi's own branch-summary text.
- *
- * pi presents a branch summary to the model as user text, wrapped so the model knows what it is, so it
- * is folded as human text with the same cap. It is the only summary this port keeps, because it is not
- * this conversation's own past.
- */
-function branchSummaryUnits(message: PiBranchSummaryMessage): SummaryUnit[] {
-  const text = PI_BRANCH_SUMMARY_PREFIX + message.summary + PI_BRANCH_SUMMARY_SUFFIX;
-  return [{ kind: "human", text }];
-}
-
-/**
- * Renders a `!` command the way pi renders it for context.
- *
- * pi builds this text in `bashExecutionToText`, which the package does not export, so the wording is
- * reproduced here and `test/pi-units.test.ts` holds it against pi's own `convertToLlm` output. A
- * command the user ran with `!` is an observation, so it becomes a `result` unit and is dropped whole
- * when it is longer than `resultMaxChars`, exactly as a tool result is.
- */
-function bashExecutionText(message: PiBashExecutionMessage): string {
-  let text = `Ran \`${message.command}\`\n`;
-  text += message.output === "" ? "(no output)" : `\`\`\`\n${message.output}\n\`\`\``;
-  if (message.cancelled) {
-    text += "\n\n(command cancelled)";
-  } else if (message.exitCode !== undefined && message.exitCode !== 0) {
-    text += `\n\nCommand exited with code ${message.exitCode}`;
+/** Converts Pi-only text roles using the exact user text Pi sends to the model. */
+function piCustomTextUnits(
+  message: PiBashExecutionMessage | PiBranchSummaryMessage,
+): SummaryUnit[] {
+  const converted = convertToLlm([message]);
+  const projected = converted[0];
+  if (projected === undefined) {
+    if (message.role === "bashExecution" && message.excludeFromContext) {
+      return [{ kind: "omitted", reason: "excludedFromContext" }];
+    }
+    throw new CliffMessageMappingError(
+      "Cliff Pi conversion omitted a bash or branch summary that belongs in context",
+    );
   }
-  if (message.truncated && message.fullOutputPath !== undefined) {
-    text += `\n\n[Output truncated. Full output: ${message.fullOutputPath}]`;
+  if (projected.role !== "user") {
+    throw new CliffMessageMappingError(
+      `Cliff Pi conversion returned role ${projected.role} for a user-context message`,
+    );
   }
-  return text;
+  return humanUnits(projected.content);
 }

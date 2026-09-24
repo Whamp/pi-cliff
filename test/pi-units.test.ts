@@ -350,9 +350,9 @@ describe("bash executions", () => {
     excludeFromContext: false,
   };
 
-  it("folds a shown execution into the text pi sends for it", () => {
+  it("folds a shown execution into Pi's exact human text", () => {
     const message = bashExecution(shown);
-    expect(textOfUnits(toSummaryUnits([message]))).toEqual([piContextText(message)]);
+    expect(toSummaryUnits([message])).toEqual([{ kind: "human", text: piContextText(message) }]);
   });
 
   it("reports the exit code and the truncation pointer the way pi does", () => {
@@ -377,11 +377,11 @@ describe("bash executions", () => {
     expect(convertToLlm([message])).toEqual([]);
   });
 
-  it("treats the output as an observation, so a long one is dropped whole", () => {
-    const units = toSummaryUnits([bashExecution({ ...shown, output: "x".repeat(900) })]);
-    const rendered = renderSummary(units, DEFAULT_SUMMARY_POLICY, "manual");
-    expect(rendered.actionParts).toEqual([]);
-    expect(rendered.stats.omissions.longToolResult).toBe(1);
+  it("preserves Pi's bash text even when it exceeds the tool-result cap", () => {
+    const message = bashExecution({ ...shown, output: "x".repeat(900) });
+    const rendered = renderSummary(toSummaryUnits([message]), DEFAULT_SUMMARY_POLICY, "manual");
+    expect(rendered.headSection).toBe(`user: ${piContextText(message)}`);
+    expect(rendered.stats.omissions.longToolResult).toBe(0);
   });
 });
 
@@ -541,7 +541,7 @@ describe("a whole turn", () => {
         "system: stay in the sandbox\n\nuser: fix the failing test\n\n---\n\n" +
         'thinking: the fixture is stale\nassistant: reading the test\n[read] {"path":"test/app.test.ts"}\n\n---\n\n' +
         "result: assert value == 2\n\n---\n\n" +
-        "result: Ran `pytest -x`\n```\n1 passed\n```\n\n---\n\n" +
+        "user: Ran `pytest -x`\n```\n1 passed\n```\n\n---\n\n" +
         "assistant: fixed, the fixture was stale",
     );
   });

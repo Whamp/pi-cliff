@@ -37,15 +37,6 @@ export const SUMMARY_HEADER_SEPARATOR = "\n\n";
  * summary text untouched (`session-manager.js` `appendCompaction`), so this framing is the only
  * overhead between the text Cliff writes and the text the provider receives.
  */
-export const PI_SUMMARY_WRAPPER_CHARS = 107;
-
-/**
- * Upstream's per-part allowance in the rung-3 accounting: `used += len(part) + 9`
- * (`spec-proxy.md` §2, "Rung 3 exact arithmetic"). The literal separator is 7 characters; upstream
- * reserves 9 and does not explain the difference, so the number is carried over unchanged.
- */
-const TRUNCATION_PART_OVERHEAD_CHARS = 9;
-
 const HUMAN_PART_PREFIX = "user: ";
 const SYSTEM_PART_PREFIX = "system: ";
 const ASSISTANT_PART_PREFIX = "assistant: ";
@@ -189,13 +180,12 @@ export interface RenderOutcome {
   omissions: OmitReason[];
 }
 
-/** The rendered candidate summary, split so the head can never be evicted by truncation. */
+/** The rendered summary, with the opening head separated from this cycle's action parts. */
 export interface SummaryRender {
   /**
    * The opening instructions as tagged, capped text, or `null` when the head region held none.
    *
-   * Kept out of `actionParts` because it is carried across compactions in the caller's own details,
-   * and eviction on overflow must never take it.
+   * Kept separate from action parts because the caller carries it across compactions as head state.
    */
   headSection: string | null;
   actionParts: string[];
@@ -599,10 +589,12 @@ function renderSummaryUnit<kind extends SummaryUnit["kind"]>(
  * Upstream takes everything before the first assistant message (`cliff.compact`) and then trims a
  * trailing previous summary off it. Here the summary arrives as its own unit, so a
  * `previousSummary` omission ends the region: what came before it is the carried head, and what
- * comes after is this cycle's action text, which eviction may drop. Other omissions are transparent,
- * because an image or a `!!` command does not end the opening turn.
+ * comes after is this cycle's action text. Other omissions are transparent, because an image or a
+ * `!!` command does not end the opening turn.
+ *
+ * The host records this exact slice as its carried head so the rendered and persisted regions agree.
  */
-function headRegionEnd(units: readonly SummaryUnit[]): number {
+export function headRegionEnd(units: readonly SummaryUnit[]): number {
   for (const [index, unit] of units.entries()) {
     if (unit.kind === "human" || unit.kind === "system") {
       continue;
@@ -712,48 +704,4 @@ export function assembleSummary(
     return SUMMARY_HEADER;
   }
   return `${SUMMARY_HEADER}${SUMMARY_HEADER_SEPARATOR}${parts.join(SUMMARY_PART_SEPARATOR)}`;
-}
-
-/**
- * Keeps the newest action parts that fit `budgetChars`, dropping from the oldest end.
- *
- * Upstream rung 3 (`spec-proxy.md` §2): walk from the newest part, keep whole parts, and stop at the
- * first part that does not fit instead of skipping it to reach an older short one, so the retained
- * text is always a contiguous recent run. Accounting is `used += part + 9`. If nothing fits the
- * result is the empty list, which {@link assembleSummary} renders as the header alone. The input is
- * returned unchanged when nothing would be dropped, matching upstream's rejection of a truncation
- * that is not shorter than the text it replaces. The head section is not a part and is never evicted.
- */
-export function truncateActionParts(actionParts: readonly string[], budgetChars: number): string[] {
-  const budget = Math.max(budgetChars, 0);
-  const kept: string[] = [];
-  let used = 0;
-  for (const part of actionParts.slice().reverse()) {
-    const length = countCodePoints(part);
-    if (used + length > budget) {
-      break;
-    }
-    kept.unshift(part);
-    used += length + TRUNCATION_PART_OVERHEAD_CHARS;
-  }
-  if (kept.length === actionParts.length) {
-    return [...actionParts];
-  }
-  return kept;
-}
-
-/**
- * Converts a token budget into the character budget {@link truncateActionParts} needs.
- *
- * Upstream computed `threshold_tokens * 4 - fixed - len(SUMMARY_HEADER) - 64`, where `fixed` was the
- * serialised cost of the rest of the request and the 64 was an unexplained reserve. Neither is
- * visible from inside pi, so both are replaced by what is measurable here: pi's own framing of the
- * summary, {@link PI_SUMMARY_WRAPPER_CHARS}. Everything else in the request, including the cost of
- * the head section and the kept tail, is the caller's to subtract from `budgetTokens`.
- *
- * May return a negative number; the budget is floored at zero where it is used, as upstream floors
- * it there.
- */
-export function actionPartBudgetChars(budgetTokens: number): number {
-  return budgetTokens * 4 - SUMMARY_HEADER.length - PI_SUMMARY_WRAPPER_CHARS;
 }

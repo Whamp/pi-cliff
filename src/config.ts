@@ -83,10 +83,17 @@ export interface CliffConfigOrigin {
   path: string;
 }
 
+/** What Cliff did with one of the two files, so `/cliff` can name the source of every value. */
+export interface CliffConfigFileState {
+  path: string;
+  state: "absent" | "read" | "invalid";
+}
+
 /** What reading the config files produced. Errors never suppress the config; the caller decides. */
 export interface CliffConfigLoad {
   config: CliffConfig;
   origins: CliffConfigOrigin[];
+  files: CliffConfigFileState[];
   errors: string[];
 }
 
@@ -123,6 +130,41 @@ const CLIFF_MODE_VALUES = ["active", "shadow", "off"] as const satisfies readonl
  */
 export function parseCliffConfig(document: unknown): CliffConfigParse {
   return parseCliffConfigDocument(document, "");
+}
+
+/**
+ * Renders one resolved key as text for `/cliff`, or `undefined` for a key this module does not know.
+ *
+ * The key grammar lives here, so the command that reports the config cannot drift from the parser that
+ * produced it, and the switch is exhaustive over {@link CliffConfigSettings} by construction.
+ */
+export function describeCliffConfigValue(config: CliffConfig, key: string): string | undefined {
+  switch (key) {
+    case "mode": {
+      return config.mode;
+    }
+    case "keepThinking": {
+      return String(config.keepThinking);
+    }
+    case "thoughtMaxChars": {
+      return String(config.thoughtMaxChars);
+    }
+    case "thinkingMaxChars": {
+      return String(config.thinkingMaxChars);
+    }
+    case "cmdMaxChars": {
+      return String(config.cmdMaxChars);
+    }
+    case "resultMaxChars": {
+      return String(config.resultMaxChars);
+    }
+    case "humanMaxChars": {
+      return String(config.humanMaxChars);
+    }
+    default: {
+      return undefined;
+    }
+  }
 }
 
 /**
@@ -171,16 +213,20 @@ export function mergeCliffConfig(layers: readonly CliffConfigSettings[]): CliffC
 export function loadCliffConfig(paths: CliffConfigPaths): CliffConfigLoad {
   const layers: CliffConfigSettings[] = [];
   const errors: string[] = [];
+  const files: CliffConfigFileState[] = [];
   const originByKey = new Map<string, string>();
   for (const path of [paths.globalPath, paths.projectPath]) {
     const read = readCliffConfigFile(path);
     if (read.state === "absent") {
+      files.push({ path, state: "absent" });
       continue;
     }
     if (read.state === "invalid") {
+      files.push({ path, state: "invalid" });
       errors.push(...read.errors);
       continue;
     }
+    files.push({ path, state: "read" });
     layers.push(read.settings);
     for (const key of Object.keys(read.settings)) {
       originByKey.set(key, path);
@@ -189,6 +235,7 @@ export function loadCliffConfig(paths: CliffConfigPaths): CliffConfigLoad {
   return {
     config: mergeCliffConfig(layers),
     origins: [...originByKey.entries()].map(([key, path]) => ({ key, path })),
+    files,
     errors,
   };
 }

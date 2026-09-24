@@ -11,31 +11,21 @@
  * `headSection`, and `assembleSummary(null, actionParts)` reproduces upstream's text exactly. The
  * generator checks that assumption per case and refuses to write a fixture whose head disagrees.
  *
- * What this file cannot prove with fixtures: `truncateActionParts`, ported at the bottom of this
- * file, has no upstream fixture. Upstream's rung-3 truncation lives in `proxy.py` behind an `Engine`
- * that imports `httpx`, so the generator cannot reach it; the arithmetic is ported by hand from
- * `/tmp/cliff-port/spec-proxy.md` §2 and pinned by the cases written here instead. The same applies
- * to the pi wrapper overhead, which is measured from pi's own `convertToLlm` rather than from
- * upstream.
  */
 
 import { readFileSync } from "node:fs";
-import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
-  actionPartBudgetChars,
   assembleSummary,
   canonicalJson,
   countCodePoints,
   DEFAULT_SUMMARY_POLICY,
-  PI_SUMMARY_WRAPPER_CHARS,
   renderSummary,
   stripPythonWhitespace,
   stripTaskNotifications,
   SUMMARY_HEADER,
   SUMMARY_HEADER_SEPARATOR,
   SUMMARY_PART_SEPARATOR,
-  truncateActionParts,
   truncateToCodePoints,
   type CliffJsonValue,
   type OmitReason,
@@ -395,11 +385,12 @@ describe("the head section", () => {
     );
   });
 
-  it("keeps the head out of the action parts so eviction cannot reach it", () => {
+  it("keeps the head separate from this cycle's action parts", () => {
     const rendered = renderSummary(units, DEFAULT_SUMMARY_POLICY, "manual");
     expect(rendered.actionParts).toEqual(["assistant: step", "user: later instruction"]);
-    const truncated = truncateActionParts(rendered.actionParts, 0);
-    expect(assembleSummary(rendered.headSection, truncated)).toContain("Fix the failing test.");
+    expect(assembleSummary(rendered.headSection, rendered.actionParts)).toContain(
+      "Fix the failing test.",
+    );
   });
 
   it("ends the head at a previous compaction summary, which contributes nothing", () => {
@@ -626,102 +617,6 @@ describe("assembleSummary", () => {
     expect(SUMMARY_HEADER).toBe(
       "The following is a summary of your previous actions (long observations omitted):",
     );
-  });
-});
-
-describe("truncateActionParts, ported by hand from the rung-3 arithmetic", () => {
-  // Upstream (`spec-proxy.md` §2) walks the parts newest first, keeps whole parts, stops at the
-  // first part that does not fit, accounts `used += len(part) + 9`, floors the budget at 0, and
-  // rejects a truncation that would not be shorter. `proxy.py` cannot be reached from the fixture
-  // generator, so these cases are written from the specification instead of generated.
-
-  it("keeps the newest parts and evicts from the oldest end", () => {
-    // Three 6-character parts: the newest costs 6, then 6 + 9 for the middle one, so 21 holds two
-    // parts and 20 holds one.
-    expect(truncateActionParts(["oldest", "middle", "newest"], 21)).toEqual(["middle", "newest"]);
-    expect(truncateActionParts(["oldest", "middle", "newest"], 20)).toEqual(["newest"]);
-  });
-
-  it("stops at the first part that does not fit instead of skipping it", () => {
-    // The oversized part is older than the newest part, so it is simply evicted.
-    expect(truncateActionParts(["x".repeat(30), "small"], 20)).toEqual(["small"]);
-    // The oversized part sits between the newest part and an older one that would still fit. It is
-    // not skipped: everything older is dropped with it.
-    expect(truncateActionParts(["small", "x".repeat(30), "newest"], 20)).toEqual(["newest"]);
-  });
-
-  it("accounts the nine-character overhead per retained part", () => {
-    // Two 10-character parts cost 10, then 10 + 9 for the second: 29 fits, 28 does not.
-    const parts = ["a".repeat(10), "b".repeat(10)];
-    expect(truncateActionParts(parts, 29)).toEqual(parts);
-    expect(truncateActionParts(parts, 28)).toEqual(["b".repeat(10)]);
-  });
-
-  it("returns the header alone when nothing fits", () => {
-    expect(truncateActionParts(["one part"], 3)).toEqual([]);
-    expect(truncateActionParts(["a", "b", "c"], 0)).toEqual([]);
-    expect(truncateActionParts(["a", "b"], -100)).toEqual([]);
-    expect(assembleSummary(null, truncateActionParts(["a", "b"], 0))).toBe(SUMMARY_HEADER);
-  });
-
-  it("returns the input unchanged when it already fits", () => {
-    const parts = ["a", "b"];
-    const truncated = truncateActionParts(parts, 10_000);
-    expect(truncated).toEqual(parts);
-    expect(truncated).not.toBe(parts);
-  });
-
-  it("counts code points in the budget too", () => {
-    const astral = "\u{1f600}".repeat(10);
-    expect(truncateActionParts([astral], 10)).toEqual([astral]);
-    expect(truncateActionParts([astral], 9)).toEqual([]);
-  });
-
-  it("leaves an empty part list alone", () => {
-    expect(truncateActionParts([], 100)).toEqual([]);
-  });
-});
-
-/**
- * Measures the framing pi adds around a stored compaction summary, by asking pi to render one.
- *
- * `convertToLlm` rewrites a `compactionSummary` message into a user message whose single text block is
- * pi's prefix, the stored summary, and pi's suffix, so the difference in code points is the overhead
- * `PI_SUMMARY_WRAPPER_CHARS` claims to be.
- */
-function piCompactionSummaryFraming(summary: string): number {
-  const converted = convertToLlm([
-    { role: "compactionSummary", summary, tokensBefore: 0, timestamp: 0 },
-  ])[0];
-  if (
-    converted === undefined ||
-    converted.role !== "user" ||
-    typeof converted.content === "string"
-  ) {
-    throw new Error("Cliff test could not measure pi's compaction summary framing");
-  }
-  const block = converted.content[0];
-  if (block === undefined || block.type !== "text") {
-    throw new Error("Cliff test could not measure pi's compaction summary framing");
-  }
-  return countCodePoints(block.text) - countCodePoints(summary);
-}
-
-describe("the overflow budget", () => {
-  it("uses the framing pi really adds, measured from pi's own convertToLlm", () => {
-    expect(PI_SUMMARY_WRAPPER_CHARS).toBe(piCompactionSummaryFraming(""));
-    expect(PI_SUMMARY_WRAPPER_CHARS).toBe(piCompactionSummaryFraming("a summary that is longer"));
-  });
-
-  it("converts tokens to characters and takes the header and the wrapper out", () => {
-    expect(actionPartBudgetChars(1000)).toBe(
-      4000 - SUMMARY_HEADER.length - PI_SUMMARY_WRAPPER_CHARS,
-    );
-  });
-
-  it("can go negative, and the budget is floored where it is used", () => {
-    expect(actionPartBudgetChars(0)).toBeLessThan(0);
-    expect(truncateActionParts(["anything"], actionPartBudgetChars(0))).toEqual([]);
   });
 });
 
