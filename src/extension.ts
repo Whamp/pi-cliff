@@ -222,9 +222,6 @@ function readCliffConfig(
 ): CliffConfigRead {
   try {
     const loaded = dependencies.loadConfig(dependencies.resolveConfigPaths(host.cwd));
-    if (!isCliffMode(loaded.config.mode)) {
-      return { ok: false, message: "config has no recognised mode" };
-    }
     return { ok: true, mode: loaded.config.mode, loaded };
   } catch (error) {
     return { ok: false, message: `config could not be read: ${describeError(error)}` };
@@ -311,7 +308,12 @@ function readCliffHeadRecord(details: unknown): CliffRecordRead {
     return { state: "absent" };
   }
   const record = asRecord(container[CLIFF_DETAILS_KEY]);
-  if (record === undefined || record["version"] !== CLIFF_DETAILS_VERSION) {
+  if (
+    record === undefined ||
+    !Object.hasOwn(record, "version") ||
+    !Object.hasOwn(record, "head") ||
+    record["version"] !== CLIFF_DETAILS_VERSION
+  ) {
     return { state: "invalid" };
   }
   const head = readHeadUnits(record["head"]);
@@ -328,8 +330,11 @@ function readHeadUnits(value: unknown): CliffHeadUnit[] | undefined {
   const head: CliffHeadUnit[] = [];
   for (const entry of value) {
     const unit = asRecord(entry);
-    const kind = unit?.["kind"];
-    const text = unit?.["text"];
+    if (unit === undefined || !Object.hasOwn(unit, "kind") || !Object.hasOwn(unit, "text")) {
+      return undefined;
+    }
+    const kind = unit["kind"];
+    const text = unit["text"];
     if ((kind !== "human" && kind !== "system") || typeof text !== "string") {
       return undefined;
     }
@@ -469,7 +474,13 @@ function describeLastReceipt(branch: SessionEntry[]): string {
 /** Parses optional outcome data without using it to recover the durable head. */
 function readOutcomeReceipt(data: unknown): CliffOutcomeReceipt | undefined {
   const record = asRecord(data);
-  if (record === undefined || record["version"] !== CLIFF_DETAILS_VERSION) {
+  if (
+    record === undefined ||
+    !["version", "outcome", "stage", "mode", "reason", "message"].every((key) =>
+      Object.hasOwn(record, key),
+    ) ||
+    record["version"] !== CLIFF_DETAILS_VERSION
+  ) {
     return undefined;
   }
   const outcome = record["outcome"];
@@ -510,16 +521,13 @@ function reportCliffDiagnostic(
   }
 }
 
-/** Reads an external object only after rejecting null and array values. */
+/** Narrows JSON objects without copying special keys such as `__proto__` into a new object. */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const record: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    record[key] = entry;
-  }
-  return record;
+  return isRecord(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isSummaryProfile(value: unknown): value is "manual" | "threshold" | "overflow" {

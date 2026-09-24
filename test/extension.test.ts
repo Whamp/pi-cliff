@@ -23,7 +23,6 @@ function makeExtension(options: { mode?: CliffMode; errors?: string[]; throwLoad
   let notificationAttempts = 0;
   let commandHandler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
   let failAppend = false;
-  let estimateCalls = 0;
   let loadCalls = 0;
   const dependencies = {
     resolveConfigPaths: () => ({
@@ -41,10 +40,6 @@ function makeExtension(options: { mode?: CliffMode; errors?: string[]; throwLoad
         files: [],
         errors: options.errors ?? [],
       };
-    },
-    estimateMessageTokens: () => {
-      estimateCalls += 1;
-      return 1;
     },
   };
   const api = {
@@ -101,9 +96,6 @@ function makeExtension(options: { mode?: CliffMode; errors?: string[]; throwLoad
     notifyCalls,
     get loadCalls() {
       return loadCalls;
-    },
-    get estimateCalls() {
-      return estimateCalls;
     },
     setNotificationError(error: Error | undefined) {
       notificationError = error;
@@ -216,7 +208,6 @@ describe("native compaction hook", () => {
     expect(compaction.summary).toContain(
       `assistant: ${"ACTION-DETAIL ".repeat(80).slice(0, 300)}...`,
     );
-    expect(harness.estimateCalls).toBe(0);
   });
 
   it("restores a valid head when optional historical report stats are absent", async () => {
@@ -284,6 +275,36 @@ describe("native compaction hook", () => {
       firstKeptEntryId: "pi-kept-entry",
       tokensBefore: 10,
       details: { cliff: { version: 1, head: [{ kind: "toolResult", text: "bad head" }] } },
+    };
+
+    const result = await compact(
+      harness,
+      event({ branchEntries: [prior], messages: [user("new turn"), assistant("new answer")] }),
+    );
+
+    expect(result).toEqual({ cancel: true });
+  });
+
+  it.each([
+    [
+      "inherited record fields",
+      '{"cliff":{"__proto__":{"version":1,"head":[{"kind":"human","text":"injected opening"}]}}}',
+    ],
+    [
+      "inherited head-unit fields",
+      '{"cliff":{"version":1,"head":[{"__proto__":{"kind":"human","text":"injected opening"}}]}}',
+    ],
+  ])("cancels when persisted head JSON uses %s", async (_caseName, encodedDetails) => {
+    const harness = makeExtension();
+    const prior: SessionEntry = {
+      type: "compaction",
+      id: "malformed-json-head",
+      parentId: null,
+      timestamp: new Date(TIMESTAMP).toISOString(),
+      summary: "untrusted persisted summary",
+      firstKeptEntryId: "pi-kept-entry",
+      tokensBefore: 10,
+      details: JSON.parse(encodedDetails),
     };
 
     const result = await compact(

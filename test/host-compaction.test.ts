@@ -286,6 +286,7 @@ async function makeSession(
     configText?: string;
     priorHead?: unknown;
     priorStats?: unknown;
+    priorDetails?: unknown;
     throwingNotify?: boolean;
   } = {},
 ): Promise<TestSession> {
@@ -304,18 +305,19 @@ async function makeSession(
 
   const sessionManager = harness.sdk.SessionManager.create(cwd, join(harness.root, "sessions"));
   const { firstFollowupId } = appendHistory(sessionManager);
-  if (options.priorHead !== undefined) {
+  if (options.priorHead !== undefined || options.priorDetails !== undefined) {
+    const priorDetails = options.priorDetails ?? {
+      cliff: {
+        version: 1,
+        head: options.priorHead,
+        summaryChars: options.priorStats,
+      },
+    };
     sessionManager.appendCompaction(
       "previous host compaction summary",
       firstFollowupId,
       1000,
-      {
-        cliff: {
-          version: 1,
-          head: options.priorHead,
-          summaryChars: options.priorStats,
-        },
-      },
+      priorDetails,
       true,
     );
     appendMoreTurns(sessionManager, 3);
@@ -542,6 +544,29 @@ describe("real Pi SDK compaction integration", () => {
         expect(measure(harness)).toEqual(before);
       } finally {
         malformedHead.session.dispose();
+      }
+
+      const malformedDetails = [
+        JSON.parse(
+          '{"cliff":{"__proto__":{"version":1,"head":[{"kind":"human","text":"injected opening"}]}}}',
+        ),
+        JSON.parse(
+          '{"cliff":{"version":1,"head":[{"__proto__":{"kind":"human","text":"injected opening"}}]}}',
+        ),
+      ];
+      for (const priorDetails of malformedDetails) {
+        const malformedJsonHead = await makeSession(harness, { priorDetails });
+        try {
+          const before = measure(harness);
+          const outcome = await malformedJsonHead.session.compact().then(
+            () => "resolved",
+            () => "rejected",
+          );
+          expect(outcome).toBe("rejected");
+          expect(measure(harness)).toEqual(before);
+        } finally {
+          malformedJsonHead.session.dispose();
+        }
       }
 
       const malformedConfig = await makeSession(harness, { configText: "{ invalid json" });
