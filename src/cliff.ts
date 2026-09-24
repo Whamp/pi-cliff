@@ -97,11 +97,11 @@ export interface ToolSignature {
 /** One assistant message: its thinking blocks, its visible text blocks, and its tool calls. */
 export interface AssistantUnit {
   kind: "assistant";
-  /** Visible text blocks. Joined with newlines, then capped once by `thoughtMaxChars`. */
+  /** Visible text blocks. Joined with newlines, then capped once by `assistantTextMaxChars`. */
   readonly thoughts: readonly string[];
-  /** Thinking-block text. Joined with newlines, then capped once by `thinkingMaxChars`. */
+  /** Thinking-block text. Joined with newlines, then capped once by `reasoningTextMaxChars`. */
   readonly thinking: readonly string[];
-  /** Tool calls in message order. Always rendered, whatever the caps on text. */
+  /** Tool calls in message order; a zero tool-call limit omits all of their signature lines. */
   readonly calls: readonly ToolSignature[];
 }
 
@@ -117,7 +117,7 @@ export interface SystemUnit {
   text: string;
 }
 
-/** One tool result. Whether it survives is the `result` rule's decision, not the mapper's. */
+/** One tool result. Whether it survives is the `toolResultMaxChars` rule, not the mapper. */
 export interface ResultUnit {
   kind: "result";
   text: string;
@@ -137,30 +137,33 @@ export interface OmittedUnit {
  */
 export type SummaryUnit = AssistantUnit | HumanUnit | SystemUnit | ResultUnit | OmittedUnit;
 
+/** A character cap, or the explicit string value that disables the cap. */
+export type CharacterLimit = number | "unlimited";
+
 /** Caps and switches that decide how much of each content class survives. */
 export interface SummaryPolicy {
-  /** Assistant text budget per message. `0` means unlimited. */
-  thoughtMaxChars: number;
-  /** Thinking text budget per message, independent of `thoughtMaxChars`. `0` means unlimited. */
-  thinkingMaxChars: number;
-  /** Tool-call argument budget per call. `0` means unlimited. */
-  cmdMaxChars: number;
-  /** Tool results longer than this are dropped whole. `0` drops every non-empty result. */
-  resultMaxChars: number;
-  /** Human and system text budget per block. `0` means unlimited. */
-  humanMaxChars: number;
-  /** When false, thinking text is dropped entirely instead of capped. */
-  keepThinking: boolean;
+  /** Assistant text budget per message; zero omits visible text. */
+  assistantTextMaxChars: CharacterLimit;
+  /** Reasoning text budget per message; zero omits reasoning text. */
+  reasoningTextMaxChars: CharacterLimit;
+  /** Serialized tool-call argument budget; zero omits whole tool-call lines. */
+  toolCallMaxChars: CharacterLimit;
+  /** Tool results longer than this are dropped whole; zero drops every non-empty result. */
+  toolResultMaxChars: CharacterLimit;
+  /** User and system text budget per block; zero omits the block and speaker label. */
+  userTextMaxChars: CharacterLimit;
+  /** When false, reasoning text is dropped entirely instead of capped. */
+  includeReasoning: boolean;
 }
 
-/** Upstream `Config` defaults for the summarisation knobs (`config.py`). */
+/** Cliff's defaults for its explicit summary-policy fields. */
 export const DEFAULT_SUMMARY_POLICY: SummaryPolicy = {
-  thoughtMaxChars: 0,
-  thinkingMaxChars: 0,
-  cmdMaxChars: 150,
-  resultMaxChars: 500,
-  humanMaxChars: 20_000,
-  keepThinking: true,
+  includeReasoning: true,
+  assistantTextMaxChars: "unlimited",
+  reasoningTextMaxChars: "unlimited",
+  toolCallMaxChars: 150,
+  toolResultMaxChars: 500,
+  userTextMaxChars: 20_000,
 };
 
 /**
@@ -212,14 +215,17 @@ export function countCodePoints(text: string): number {
 }
 
 /**
- * Truncates to `maxChars` Unicode code points and appends `...`, as upstream `truncate` does.
+ * Truncates to `maxChars` Unicode code points and appends `...` after positive-limit cuts.
  *
- * `maxChars <= 0` means unlimited, which is upstream's meaning of `0` and of a falsy cap. The cut is
- * made between code points, so an astral character is never split into lone surrogates.
+ * `"unlimited"` leaves text unchanged and zero retains no text. The cut is made between code points,
+ * so an astral character is never split into lone surrogates.
  */
-export function truncateToCodePoints(text: string, maxChars: number): string {
-  if (maxChars <= 0) {
+export function truncateToCodePoints(text: string, maxChars: CharacterLimit): string {
+  if (maxChars === "unlimited") {
     return text;
+  }
+  if (maxChars === 0) {
+    return "";
   }
   const codePoints = Array.from(text);
   if (codePoints.length <= maxChars) {
@@ -484,20 +490,23 @@ function foldBlocks(blocks: readonly string[]): string {
 
 function renderAssistantUnit(unit: AssistantUnit, policy: SummaryPolicy): RenderOutcome {
   const lines: string[] = [];
-  if (policy.keepThinking) {
-    const thinking = truncateToCodePoints(foldBlocks(unit.thinking), policy.thinkingMaxChars);
-    if (thinking !== "") {
-      lines.push(`${THINKING_PART_PREFIX}${thinking}`);
+  if (policy.includeReasoning) {
+    const reasoning = truncateToCodePoints(foldBlocks(unit.thinking), policy.reasoningTextMaxChars);
+    if (reasoning !== "") {
+      lines.push(`${THINKING_PART_PREFIX}${reasoning}`);
     }
   }
-  const thought = truncateToCodePoints(foldBlocks(unit.thoughts), policy.thoughtMaxChars);
+  const thought = truncateToCodePoints(foldBlocks(unit.thoughts), policy.assistantTextMaxChars);
   if (thought !== "") {
     lines.push(`${ASSISTANT_PART_PREFIX}${thought}`);
   }
-  const signatures = unit.calls.map(
-    (call) =>
-      `[${call.name}] ${truncateToCodePoints(canonicalJson(call.args), policy.cmdMaxChars)}`,
-  );
+  const signatures =
+    policy.toolCallMaxChars === 0
+      ? []
+      : unit.calls.map(
+          (call) =>
+            `[${call.name}] ${truncateToCodePoints(canonicalJson(call.args), policy.toolCallMaxChars)}`,
+        );
   if (signatures.length > 0) {
     lines.push(signatures.join("\n"));
   }
@@ -510,10 +519,8 @@ function renderHumanUnit(unit: HumanUnit, policy: SummaryPolicy): RenderOutcome 
     // Notification-only and blank human messages fold to nothing, upstream _summarize_user.
     return { parts: [], omissions: [] };
   }
-  return {
-    parts: [`${HUMAN_PART_PREFIX}${truncateToCodePoints(text, policy.humanMaxChars)}`],
-    omissions: [],
-  };
+  const capped = truncateToCodePoints(text, policy.userTextMaxChars);
+  return { parts: capped === "" ? [] : [`${HUMAN_PART_PREFIX}${capped}`], omissions: [] };
 }
 
 function renderSystemUnit(unit: SystemUnit, policy: SummaryPolicy): RenderOutcome {
@@ -523,10 +530,8 @@ function renderSystemUnit(unit: SystemUnit, policy: SummaryPolicy): RenderOutcom
   if (text === "") {
     return { parts: [], omissions: [] };
   }
-  return {
-    parts: [`${SYSTEM_PART_PREFIX}${truncateToCodePoints(text, policy.humanMaxChars)}`],
-    omissions: [],
-  };
+  const capped = truncateToCodePoints(text, policy.userTextMaxChars);
+  return { parts: capped === "" ? [] : [`${SYSTEM_PART_PREFIX}${capped}`], omissions: [] };
 }
 
 function renderResultUnit(unit: ResultUnit, policy: SummaryPolicy): RenderOutcome {
@@ -534,7 +539,10 @@ function renderResultUnit(unit: ResultUnit, policy: SummaryPolicy): RenderOutcom
   if (text === "") {
     return { parts: [], omissions: ["emptyToolResult"] };
   }
-  if (countCodePoints(text) > policy.resultMaxChars) {
+  if (
+    policy.toolResultMaxChars !== "unlimited" &&
+    countCodePoints(text) > policy.toolResultMaxChars
+  ) {
     // Dropped whole. Truncating an observation would leave a prefix that reads like the result.
     return { parts: [], omissions: ["longToolResult"] };
   }
@@ -611,16 +619,16 @@ export function headRegionEnd(units: readonly SummaryUnit[]): number {
  * Renders one opening message as tagged, capped text.
  *
  * The head is text pi showed the model, not a summarised part: it is not trimmed, not stripped of
- * `<task-notification>` blocks, and never evicted. The speaker tag and the `humanMaxChars` bound are
- * shared with the action rules so that every text block in a summary reads the same way, and so that
- * one giant opening paste cannot become permanent, uncompactable context.
+ * `<task-notification>` blocks, and never evicted. The speaker tag and `userTextMaxChars` bound are
+ * shared with the action rules; a zero limit omits both text and label.
  */
 function renderHeadUnit(unit: HumanUnit | SystemUnit, policy: SummaryPolicy): string | null {
   const prefix = unit.kind === "system" ? SYSTEM_PART_PREFIX : HUMAN_PART_PREFIX;
   if (stripPythonWhitespace(unit.text) === "") {
     return null;
   }
-  return `${prefix}${truncateToCodePoints(unit.text, policy.humanMaxChars)}`;
+  const capped = truncateToCodePoints(unit.text, policy.userTextMaxChars);
+  return capped === "" ? null : `${prefix}${capped}`;
 }
 
 /**
@@ -636,11 +644,11 @@ function resolveSummaryPolicy(policy: SummaryPolicy, profile: SummaryProfile): S
   }
   return {
     ...policy,
-    keepThinking: false,
-    thoughtMaxChars:
-      policy.thoughtMaxChars === 0
+    includeReasoning: false,
+    assistantTextMaxChars:
+      policy.assistantTextMaxChars === "unlimited"
         ? OVERFLOW_THOUGHT_MAX_CHARS
-        : Math.min(policy.thoughtMaxChars, OVERFLOW_THOUGHT_MAX_CHARS),
+        : Math.min(policy.assistantTextMaxChars, OVERFLOW_THOUGHT_MAX_CHARS),
   };
 }
 

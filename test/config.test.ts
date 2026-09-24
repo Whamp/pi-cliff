@@ -5,9 +5,7 @@
  * `loadCliffConfig` taking explicit paths is that a test can prove Cliff reads what it is told and
  * nothing else. The host's real `~/.pi/agent/cliff.json` is never a fixture here.
  *
- * The zero-semantics cases are pinned rather than assumed: `0` is unlimited for a text cap and "drop
- * every non-empty result" for `resultMaxChars`, so the parser must accept `0` everywhere and leave the
- * meaning to the render rules, which `test/cliff.test.ts` covers against upstream's own goldens.
+ * The policy tests pin the literal `unlimited` value and the uniform zero-means-no-content rule.
  */
 
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
@@ -18,7 +16,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_SUMMARY_POLICY } from "../src/cliff.js";
 import {
   CLIFF_CONFIG_FILE_NAME,
+  CLIFF_CONFIG_OPTIONS,
   DEFAULT_CLIFF_CONFIG,
+  formatCliffConfigHelp,
   loadCliffConfig,
   mergeCliffConfig,
   parseCliffConfig,
@@ -62,147 +62,156 @@ function paths(globalPath?: string, projectPath?: string): CliffConfigPaths {
   };
 }
 
-describe("parseCliffConfig accepts what the documentation allows", () => {
-  it("names no settings for an empty document, so the defaults stand", () => {
+describe("parseCliffConfig accepts the documented policy", () => {
+  it("leaves defaults alone for an empty object", () => {
     const parsed = parseCliffConfig({});
-    if (!parsed.ok) {
-      throw new Error(`Cliff test: ${parsed.errors.join("; ")}`);
-    }
-    expect(parsed.settings).toEqual({});
-    expect(mergeCliffConfig([parsed.settings])).toEqual(DEFAULT_CLIFF_CONFIG);
+    expect(parsed).toEqual({ ok: true, settings: {} });
+    expect(mergeCliffConfig([{}])).toEqual(DEFAULT_CLIFF_CONFIG);
   });
 
-  it("accepts each mode by name", () => {
+  it("accepts each mode", () => {
     for (const mode of ["active", "shadow", "off"] as const) {
-      const parsed = parseCliffConfig({ mode });
-      expect(parsed.ok ? parsed.settings : parsed.errors).toEqual({ mode });
+      expect(parseCliffConfig({ mode })).toEqual({ ok: true, settings: { mode } });
     }
   });
 
-  it("accepts 0 for every text cap, which means unlimited", () => {
+  it("accepts zero and the exact unlimited sentinel for all five limits", () => {
     const parsed = parseCliffConfig({
-      thoughtMaxChars: 0,
-      thinkingMaxChars: 0,
-      cmdMaxChars: 0,
-      humanMaxChars: 0,
+      assistantTextMaxChars: 0,
+      reasoningTextMaxChars: "unlimited",
+      toolCallMaxChars: 1,
+      toolResultMaxChars: 0,
+      userTextMaxChars: "unlimited",
     });
-    if (!parsed.ok) {
-      throw new Error(`Cliff test: ${parsed.errors.join("; ")}`);
-    }
-    expect(parsed.settings).toEqual({
-      thoughtMaxChars: 0,
-      thinkingMaxChars: 0,
-      cmdMaxChars: 0,
-      humanMaxChars: 0,
-    });
-  });
-
-  it("accepts resultMaxChars 0, which is upstream's drop-every-result value, not an error", () => {
-    const parsed = parseCliffConfig({ resultMaxChars: 0 });
-    if (!parsed.ok) {
-      throw new Error(`Cliff test: resultMaxChars 0 was rejected: ${parsed.errors.join("; ")}`);
-    }
-    expect(parsed.settings.resultMaxChars).toBe(0);
-  });
-
-  it("accepts keepThinking either way", () => {
-    expect(parseCliffConfig({ keepThinking: false })).toEqual({
+    expect(parsed).toEqual({
       ok: true,
-      settings: { keepThinking: false },
-    });
-    expect(parseCliffConfig({ keepThinking: true })).toEqual({
-      ok: true,
-      settings: { keepThinking: true },
+      settings: {
+        assistantTextMaxChars: 0,
+        reasoningTextMaxChars: "unlimited",
+        toolCallMaxChars: 1,
+        toolResultMaxChars: 0,
+        userTextMaxChars: "unlimited",
+      },
     });
   });
 
-  it("reads every documented key, which is the guard against a key accepted but never applied", () => {
+  it("accepts includeReasoning either way", () => {
+    expect(parseCliffConfig({ includeReasoning: false })).toEqual({
+      ok: true,
+      settings: { includeReasoning: false },
+    });
+    expect(parseCliffConfig({ includeReasoning: true })).toEqual({
+      ok: true,
+      settings: { includeReasoning: true },
+    });
+  });
+
+  it("reads all seven settings under their public names", () => {
     const document = {
       mode: "shadow",
-      keepThinking: false,
-      thoughtMaxChars: 11,
-      thinkingMaxChars: 12,
-      cmdMaxChars: 13,
-      resultMaxChars: 14,
-      humanMaxChars: 15,
+      includeReasoning: false,
+      assistantTextMaxChars: 11,
+      reasoningTextMaxChars: 12,
+      toolCallMaxChars: 13,
+      toolResultMaxChars: 14,
+      userTextMaxChars: 15,
     };
     const parsed = parseCliffConfig(document);
-    if (!parsed.ok) {
-      throw new Error(`Cliff test: ${parsed.errors.join("; ")}`);
-    }
-    expect(parsed.settings).toEqual(document);
-    expect(Object.keys(parsed.settings)).toHaveLength(7);
+    expect(parsed).toEqual({ ok: true, settings: document });
+    expect(parsed.ok && Object.keys(parsed.settings)).toHaveLength(7);
+  });
+
+  it("formats one copyable strict JSON default object from the option metadata", () => {
+    const help = formatCliffConfigHelp();
+    const defaultBlock = help.match(/```json\n([\s\S]*?)\n```/)?.[1];
+
+    expect(CLIFF_CONFIG_OPTIONS.map(({ key }) => key)).toEqual([
+      "mode",
+      "includeReasoning",
+      "assistantTextMaxChars",
+      "reasoningTextMaxChars",
+      "toolCallMaxChars",
+      "toolResultMaxChars",
+      "userTextMaxChars",
+    ]);
+    expect(defaultBlock).toBeDefined();
+    expect(JSON.parse(defaultBlock ?? "")).toEqual(DEFAULT_CLIFF_CONFIG);
+    expect(help).toContain(
+      "Precedence: built-in defaults, then the global file, then the project file.",
+    );
+    expect(help).toContain("Pi owns the compaction trigger, cut, kept tail, and persistence");
   });
 });
 
-describe("parseCliffConfig rejects what it cannot honour", () => {
-  it("rejects an unknown key and names the keys it knows", () => {
-    const parsed = parseCliffConfig({ modee: "active" });
-    if (parsed.ok) {
-      throw new Error("Cliff test: an unknown key was accepted");
+describe("parseCliffConfig rejects unsupported config", () => {
+  it("rejects unknown names and suggests exact replacements for retired keys", () => {
+    const unknown = parseCliffConfig({ modee: "active" });
+    expect(!unknown.ok && unknown.errors[0]).toContain('unknown key "modee"');
+    expect(!unknown.ok && unknown.errors[0]).toContain("includeReasoning");
+    expect(!unknown.ok && unknown.errors[0]).toContain("toolResultMaxChars");
+    expect(parseCliffConfig({ Mode: "off" })).toMatchObject({
+      ok: false,
+      errors: [expect.stringContaining('unknown key "Mode"')],
+    });
+
+    const retired = [
+      ["keepThinking", "includeReasoning", undefined],
+      ["thoughtMaxChars", "assistantTextMaxChars", 'use "unlimited" to preserve it'],
+      ["thinkingMaxChars", "reasoningTextMaxChars", 'use "unlimited" to preserve it'],
+      ["cmdMaxChars", "toolCallMaxChars", 'use "unlimited" to preserve it'],
+      ["resultMaxChars", "toolResultMaxChars", "still drops every non-empty result"],
+      ["humanMaxChars", "userTextMaxChars", 'use "unlimited" to preserve it'],
+    ] as const;
+    for (const [retiredKey, replacement, hint] of retired) {
+      const parsed = parseCliffConfig({ [retiredKey]: 0 });
+      expect(!parsed.ok && parsed.errors[0]).toContain(`retired key "${retiredKey}"`);
+      expect(!parsed.ok && parsed.errors[0]).toContain(`"${replacement}"`);
+      if (hint !== undefined) {
+        expect(!parsed.ok && parsed.errors[0]).toContain(hint);
+      }
     }
-    expect(parsed.errors).toHaveLength(1);
-    expect(parsed.errors[0]).toContain('unknown key "modee"');
-    expect(parsed.errors[0]).toContain("keepThinking");
-    expect(parsed.errors[0]).toContain("resultMaxChars");
   });
 
-  it("rejects a key whose only mistake is its case, because a silently ignored cap is worse", () => {
-    const parsed = parseCliffConfig({ Mode: "off" });
-    expect(!parsed.ok && parsed.errors[0]?.includes('unknown key "Mode"')).toBe(true);
-  });
-
-  it("rejects a mode outside the three documented ones and lists them", () => {
+  it("rejects an unknown mode and lists the accepted modes", () => {
     const parsed = parseCliffConfig({ mode: "aggressive" });
-    if (parsed.ok) {
-      throw new Error("Cliff test: an unknown mode was accepted");
-    }
-    expect(parsed.errors[0]).toContain('"mode" must be one of "active", "shadow", "off"');
-    expect(parsed.errors[0]).toContain('"aggressive"');
-  });
-
-  it("rejects a negative cap", () => {
-    const parsed = parseCliffConfig({ cmdMaxChars: -1 });
-    if (parsed.ok) {
-      throw new Error("Cliff test: a negative cap was accepted");
-    }
-    expect(parsed.errors[0]).toContain('"cmdMaxChars" must not be negative');
-  });
-
-  it("rejects a fractional cap, because a cap is a count of characters", () => {
-    const parsed = parseCliffConfig({ humanMaxChars: 10.5 });
-    expect(!parsed.ok && parsed.errors[0]?.includes('"humanMaxChars" must be a whole number')).toBe(
-      true,
+    expect(!parsed.ok && parsed.errors[0]).toContain(
+      '"mode" must be one of "active", "shadow", "off"',
     );
   });
 
-  it("rejects the numbers JSON cannot hold, which a caller building settings in code could pass", () => {
-    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
-      const parsed = parseCliffConfig({ thoughtMaxChars: value });
-      expect(!parsed.ok && parsed.errors[0]?.includes('"thoughtMaxChars"')).toBe(true);
+  it("rejects negative, fractional, unsafe, null, and non-exact strings for every limit", () => {
+    const limitKeys = [
+      "assistantTextMaxChars",
+      "reasoningTextMaxChars",
+      "toolCallMaxChars",
+      "toolResultMaxChars",
+      "userTextMaxChars",
+    ] as const;
+    const invalidValues: unknown[] = [
+      -1,
+      10.5,
+      Number.MAX_SAFE_INTEGER + 1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      null,
+      "150",
+      "Unlimited",
+    ];
+    for (const key of limitKeys) {
+      for (const value of invalidValues) {
+        const parsed = parseCliffConfig({ [key]: value });
+        expect(!parsed.ok && parsed.errors[0]).toContain(`"${key}"`);
+      }
     }
-  });
-
-  it("rejects a cap that is not a number, naming what was found", () => {
-    expect(parseCliffConfig({ cmdMaxChars: "150" })).toEqual({
+    expect(parseCliffConfig({ userTextMaxChars: -1 })).toMatchObject({
       ok: false,
-      errors: [
-        'Cliff config: "cmdMaxChars" must be a whole number of characters, 0 for unlimited, not "150"',
-      ],
-    });
-    expect(parseCliffConfig({ humanMaxChars: null })).toEqual({
-      ok: false,
-      errors: [
-        'Cliff config: "humanMaxChars" must be a whole number of characters, 0 for unlimited, not null',
-      ],
+      errors: [expect.stringContaining('"userTextMaxChars" must not be negative')],
     });
   });
 
-  it("rejects a keepThinking that is not a boolean", () => {
-    const parsed = parseCliffConfig({ keepThinking: "yes" });
-    expect(!parsed.ok && parsed.errors[0]?.includes('"keepThinking" must be true or false')).toBe(
-      true,
-    );
+  it("rejects a non-boolean includeReasoning value", () => {
+    const parsed = parseCliffConfig({ includeReasoning: "yes" });
+    expect(!parsed.ok && parsed.errors[0]).toContain('"includeReasoning" must be true or false');
   });
 
   it("describes an invalid object value as JSON instead of [object Object]", () => {
@@ -213,58 +222,65 @@ describe("parseCliffConfig rejects what it cannot honour", () => {
   it("rejects a document that is not an object, including an array", () => {
     for (const document of [null, 7, "active", ["mode"], true]) {
       const parsed = parseCliffConfig(document);
-      expect(!parsed.ok && parsed.errors[0]?.includes("expected a JSON object")).toBe(true);
+      expect(!parsed.ok && parsed.errors[0]).toContain("expected a JSON object");
     }
   });
 
-  it("reports every problem in one pass, so one report lists all of the user's mistakes", () => {
-    const parsed = parseCliffConfig({ mode: "slow", keepThinking: 1, thoughtMaxChars: -2, x: 1 });
-    if (parsed.ok) {
-      throw new Error("Cliff test: an invalid document was accepted");
+  it("reports every problem in one pass with a config prefix", () => {
+    const parsed = parseCliffConfig({
+      mode: "slow",
+      includeReasoning: 1,
+      assistantTextMaxChars: -2,
+      unknown: 1,
+    });
+    expect(parsed).toMatchObject({ ok: false, errors: expect.any(Array) });
+    if (!parsed.ok) {
+      expect(parsed.errors).toHaveLength(4);
+      expect(parsed.errors.join("\n")).toContain('"mode"');
+      expect(parsed.errors.join("\n")).toContain('"includeReasoning"');
+      expect(parsed.errors.join("\n")).toContain('"assistantTextMaxChars"');
+      expect(parsed.errors.join("\n")).toContain('unknown key "unknown"');
+      expect(parsed.errors.every((error) => error.startsWith("Cliff config:"))).toBe(true);
     }
-    expect(parsed.errors).toHaveLength(4);
-    expect(parsed.errors.join("\n")).toContain('"mode"');
-    expect(parsed.errors.join("\n")).toContain('"keepThinking"');
-    expect(parsed.errors.join("\n")).toContain('"thoughtMaxChars"');
-    expect(parsed.errors.join("\n")).toContain('unknown key "x"');
-  });
-
-  it("prefixes every message so a diagnostic greps back to the config module", () => {
-    const parsed = parseCliffConfig({ mode: "slow" });
-    expect(!parsed.ok && parsed.errors[0]?.startsWith("Cliff config:")).toBe(true);
   });
 });
 
 describe("mergeCliffConfig", () => {
-  it("returns upstream's defaults when no layer names anything", () => {
+  it("returns the named defaults when no layer overrides them", () => {
     expect(mergeCliffConfig([])).toEqual(DEFAULT_CLIFF_CONFIG);
     expect(mergeCliffConfig([])).toEqual({ mode: "active", ...DEFAULT_SUMMARY_POLICY });
   });
 
   it("applies layers in order, so the project file wins over the global one", () => {
-    const resolved = mergeCliffConfig([{ cmdMaxChars: 100 }, { cmdMaxChars: 20, mode: "shadow" }]);
-    expect(resolved.cmdMaxChars).toBe(20);
+    const resolved = mergeCliffConfig([
+      { toolCallMaxChars: 100 },
+      { toolCallMaxChars: 20, mode: "shadow" },
+    ]);
+    expect(resolved.toolCallMaxChars).toBe(20);
     expect(resolved.mode).toBe("shadow");
   });
 
-  it("keeps the other caps when a layer names only one, which is what a one-key project file needs", () => {
-    const resolved = mergeCliffConfig([{ cmdMaxChars: 100, humanMaxChars: 500 }, { mode: "off" }]);
+  it("keeps unnamed values when a layer overrides only one or two keys", () => {
+    const resolved = mergeCliffConfig([
+      { toolCallMaxChars: 100, userTextMaxChars: 500 },
+      { mode: "off" },
+    ]);
     expect(resolved).toEqual({
       mode: "off",
-      keepThinking: DEFAULT_SUMMARY_POLICY.keepThinking,
-      thoughtMaxChars: DEFAULT_SUMMARY_POLICY.thoughtMaxChars,
-      thinkingMaxChars: DEFAULT_SUMMARY_POLICY.thinkingMaxChars,
-      cmdMaxChars: 100,
-      resultMaxChars: DEFAULT_SUMMARY_POLICY.resultMaxChars,
-      humanMaxChars: 500,
+      includeReasoning: DEFAULT_SUMMARY_POLICY.includeReasoning,
+      assistantTextMaxChars: DEFAULT_SUMMARY_POLICY.assistantTextMaxChars,
+      reasoningTextMaxChars: DEFAULT_SUMMARY_POLICY.reasoningTextMaxChars,
+      toolCallMaxChars: 100,
+      toolResultMaxChars: DEFAULT_SUMMARY_POLICY.toolResultMaxChars,
+      userTextMaxChars: 500,
     });
   });
 
   it("does not mutate the defaults or its layers", () => {
-    const globalSettings = { cmdMaxChars: 100 };
+    const globalSettings = { toolCallMaxChars: 100 };
     mergeCliffConfig([globalSettings]);
-    expect(DEFAULT_CLIFF_CONFIG.cmdMaxChars).toBe(DEFAULT_SUMMARY_POLICY.cmdMaxChars);
-    expect(globalSettings).toEqual({ cmdMaxChars: 100 });
+    expect(DEFAULT_CLIFF_CONFIG.toolCallMaxChars).toBe(DEFAULT_SUMMARY_POLICY.toolCallMaxChars);
+    expect(globalSettings).toEqual({ toolCallMaxChars: 100 });
   });
 });
 
@@ -291,18 +307,18 @@ describe("loadCliffConfig reads the two files it is handed", () => {
 
   it("lets the project file win key by key and records which file each value came from", async () => {
     const { globalPath, projectPath } = paths();
-    await writeConfigFileWith(globalPath, { cmdMaxChars: 100, humanMaxChars: 900 });
-    await writeConfigFileWith(projectPath, { cmdMaxChars: 20, mode: "off" });
+    await writeConfigFileWith(globalPath, { toolCallMaxChars: 100, userTextMaxChars: 900 });
+    await writeConfigFileWith(projectPath, { toolCallMaxChars: 20, mode: "off" });
     const loaded = loadCliffConfig({ globalPath, projectPath });
     expect(loaded.config).toEqual({
       ...DEFAULT_CLIFF_CONFIG,
       mode: "off",
-      cmdMaxChars: 20,
-      humanMaxChars: 900,
+      toolCallMaxChars: 20,
+      userTextMaxChars: 900,
     });
     expect(loaded.origins).toEqual([
-      { key: "cmdMaxChars", path: projectPath },
-      { key: "humanMaxChars", path: globalPath },
+      { key: "toolCallMaxChars", path: projectPath },
+      { key: "userTextMaxChars", path: globalPath },
       { key: "mode", path: projectPath },
     ]);
   });
@@ -330,8 +346,8 @@ describe("loadCliffConfig reads the two files it is handed", () => {
 
   it("reads both files even when the first is broken, so one report lists every mistake", async () => {
     const { globalPath, projectPath } = paths();
-    await writeConfigFileWith(paths().globalPath, { cmdMaxChars: "wide" });
-    await writeConfigFileWith(projectPath, { humanMaxChars: -1 });
+    await writeConfigFileWith(paths().globalPath, { toolCallMaxChars: "wide" });
+    await writeConfigFileWith(projectPath, { userTextMaxChars: -1 });
     const loaded = loadCliffConfig({ globalPath, projectPath });
     expect(loaded.errors).toHaveLength(2);
     expect(loaded.config).toEqual(DEFAULT_CLIFF_CONFIG);
@@ -341,12 +357,12 @@ describe("loadCliffConfig reads the two files it is handed", () => {
     const { globalPath, projectPath } = paths();
     const documented = `{
   "mode": "active",
-  "keepThinking": true,
-  "thoughtMaxChars": 0,
-  "thinkingMaxChars": 0,
-  "cmdMaxChars": 150,
-  "resultMaxChars": 500,
-  "humanMaxChars": 20000
+  "includeReasoning": true,
+  "assistantTextMaxChars": "unlimited",
+  "reasoningTextMaxChars": "unlimited",
+  "toolCallMaxChars": 150,
+  "toolResultMaxChars": 500,
+  "userTextMaxChars": 20000
 }
 `;
     await writeConfigFile(globalPath, documented);

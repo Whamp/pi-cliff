@@ -112,33 +112,51 @@ function parseText(value: unknown, where: string): string {
   );
 }
 
-const NUMERIC_POLICY_KEYS = [
+const LEGACY_LIMIT_KEYS = [
   "thoughtMaxChars",
   "thinkingMaxChars",
   "cmdMaxChars",
   "resultMaxChars",
   "humanMaxChars",
 ] as const;
-const KNOWN_POLICY_KEYS: readonly string[] = [...NUMERIC_POLICY_KEYS, "keepThinking"];
+type LegacyLimitKey = (typeof LEGACY_LIMIT_KEYS)[number];
+type CharacterPolicyKey = Exclude<keyof SummaryPolicy, "includeReasoning">;
 
-/** Reads a policy overlay, starting from upstream's defaults and rejecting unknown keys. */
+const LEGACY_POLICY_KEYS: Record<LegacyLimitKey, CharacterPolicyKey> = {
+  thoughtMaxChars: "assistantTextMaxChars",
+  thinkingMaxChars: "reasoningTextMaxChars",
+  cmdMaxChars: "toolCallMaxChars",
+  resultMaxChars: "toolResultMaxChars",
+  humanMaxChars: "userTextMaxChars",
+};
+const LEGACY_TEXT_LIMIT_KEYS: readonly LegacyLimitKey[] = [
+  "thoughtMaxChars",
+  "thinkingMaxChars",
+  "cmdMaxChars",
+  "humanMaxChars",
+];
+const KNOWN_POLICY_KEYS: readonly string[] = [...LEGACY_LIMIT_KEYS, "keepThinking"];
+
+/** Converts upstream fixture config names and zero meanings to Cliff's public policy. */
 function parsePolicy(value: unknown, where: string): SummaryPolicy {
   const object = parseObject(value, where);
   const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY };
-  for (const key of NUMERIC_POLICY_KEYS) {
+  for (const key of LEGACY_LIMIT_KEYS) {
     const raw = object[key];
     if (raw !== undefined) {
-      policy[key] = parseNumber(raw, `${where}.${key}`);
+      const legacyLimit = parseNumber(raw, `${where}.${key}`);
+      policy[LEGACY_POLICY_KEYS[key]] =
+        legacyLimit === 0 && LEGACY_TEXT_LIMIT_KEYS.includes(key) ? "unlimited" : legacyLimit;
     }
   }
   const keepThinking = object["keepThinking"];
   if (keepThinking !== undefined) {
-    policy.keepThinking = parseBoolean(keepThinking, `${where}.keepThinking`);
+    policy.includeReasoning = parseBoolean(keepThinking, `${where}.keepThinking`);
   }
   const unknown = Object.keys(object).filter((key) => !KNOWN_POLICY_KEYS.includes(key));
   if (unknown.length > 0) {
     throw new FixtureParseError(
-      `Cliff fixture ${where}: unknown config keys ${unknown.join(", ")}`,
+      `Cliff fixture ${where}: unknown upstream config keys ${unknown.join(", ")}`,
     );
   }
   return policy;
@@ -338,8 +356,31 @@ describe("Cliff renders what upstream's compact() wrote", () => {
     });
   }
 
-  it("upstream's own Config defaults are the port's defaults", () => {
+  it("keeps all 35 upstream golden cases against Cliff's explicit defaults", () => {
+    expect(fixtures.cases).toHaveLength(35);
     expect(fixtures.defaults).toEqual(DEFAULT_SUMMARY_POLICY);
+  });
+
+  it("translates legacy fixture-only zero limits to their original meaning", () => {
+    expect(
+      parsePolicy(
+        {
+          thoughtMaxChars: 0,
+          thinkingMaxChars: 0,
+          cmdMaxChars: 0,
+          resultMaxChars: 0,
+          humanMaxChars: 0,
+        },
+        "legacy fixture migration",
+      ),
+    ).toEqual({
+      includeReasoning: true,
+      assistantTextMaxChars: "unlimited",
+      reasoningTextMaxChars: "unlimited",
+      toolCallMaxChars: "unlimited",
+      toolResultMaxChars: 0,
+      userTextMaxChars: "unlimited",
+    });
   });
 
   it("writes the header alone when no part survives", () => {
@@ -409,8 +450,8 @@ describe("the head section", () => {
     expect(rendered.stats.omissions.previousSummary).toBe(1);
   });
 
-  it("bounds head text by humanMaxChars so one giant paste cannot be permanent", () => {
-    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, humanMaxChars: 10 };
+  it("bounds carried head text by userTextMaxChars", () => {
+    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, userTextMaxChars: 10 };
     const rendered = renderSummary([{ kind: "human", text: "a".repeat(40) }], policy, "manual");
     expect(rendered.headSection).toBe(`user: ${"a".repeat(10)}...`);
   });
@@ -494,18 +535,156 @@ describe("caps count code points, not UTF-16 units", () => {
 
   it("leaves text at or below the cap alone, and treats 0 as unlimited", () => {
     expect(truncateToCodePoints(astral, 5)).toBe(astral);
-    expect(truncateToCodePoints(astral, 0)).toBe(astral);
-    expect(truncateToCodePoints(astral, -1)).toBe(astral);
+    expect(truncateToCodePoints(astral, "unlimited")).toBe(astral);
+    expect(truncateToCodePoints(astral, 0)).toBe("");
   });
 
   it("applies the cap by code points through the render rules too", () => {
-    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, thoughtMaxChars: 2 };
+    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, assistantTextMaxChars: 2 };
     const rendered = renderSummary(
       [{ kind: "assistant", thoughts: [astral], thinking: [], calls: [] }],
       policy,
       "manual",
     );
     expect(rendered.actionParts).toEqual([`assistant: \u{1f600}\u{1f601}...`]);
+  });
+});
+
+describe("explicit character-limit semantics", () => {
+  const assistant: SummaryUnit = {
+    kind: "assistant",
+    thoughts: ["visible \u{1f600}\u{1f601}"],
+    thinking: ["reasoning \u{1f600}\u{1f601}"],
+    calls: [{ name: "bash", args: "\u{1f600}ab" }],
+  };
+
+  it("zero omits assistant text, reasoning, tool-call lines, results, users, and systems", () => {
+    const policy: SummaryPolicy = {
+      ...DEFAULT_SUMMARY_POLICY,
+      assistantTextMaxChars: 0,
+      reasoningTextMaxChars: 0,
+      toolCallMaxChars: 0,
+      toolResultMaxChars: 0,
+      userTextMaxChars: 0,
+    };
+    const rendered = renderSummary(
+      [
+        assistant,
+        { kind: "result", text: "tool result" },
+        { kind: "human", text: "user message" },
+        { kind: "system", text: "system directive" },
+      ],
+      policy,
+      "manual",
+    );
+
+    expect(rendered.actionParts).toEqual([]);
+    expect(rendered.stats.omissions.longToolResult).toBe(1);
+  });
+
+  it("zero omits labels from the carried opening head", () => {
+    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, userTextMaxChars: 0 };
+    const rendered = renderSummary(
+      [
+        { kind: "human", text: "opening task" },
+        { kind: "system", text: "system directive" },
+        assistant,
+      ],
+      policy,
+      "manual",
+    );
+
+    expect(rendered.headSection).toBeNull();
+    expect(rendered.actionParts).toEqual([
+      `thinking: reasoning \u{1f600}\u{1f601}\nassistant: visible \u{1f600}\u{1f601}\n[bash] "\u{1f600}ab"`,
+    ]);
+  });
+
+  it('"unlimited" keeps carried opening text without truncation', () => {
+    const rendered = renderSummary(
+      [
+        { kind: "human", text: "opening \u{1f600}" },
+        { kind: "system", text: "directive \u{1f601}" },
+        { kind: "assistant", thoughts: [], thinking: [], calls: [] },
+      ],
+      { ...DEFAULT_SUMMARY_POLICY, userTextMaxChars: "unlimited" },
+      "manual",
+    );
+
+    expect(rendered.headSection).toBe("user: opening \u{1f600}\n\nsystem: directive \u{1f601}");
+  });
+
+  it('"unlimited" keeps all five categories without truncating Unicode text', () => {
+    const policy: SummaryPolicy = {
+      ...DEFAULT_SUMMARY_POLICY,
+      assistantTextMaxChars: "unlimited",
+      reasoningTextMaxChars: "unlimited",
+      toolCallMaxChars: "unlimited",
+      toolResultMaxChars: "unlimited",
+      userTextMaxChars: "unlimited",
+    };
+    const rendered = renderSummary(
+      [
+        assistant,
+        { kind: "result", text: "result \u{1f600}" },
+        { kind: "human", text: "user \u{1f600}" },
+        { kind: "system", text: "system \u{1f600}" },
+      ],
+      policy,
+      "manual",
+    );
+
+    expect(rendered.actionParts).toEqual([
+      `thinking: reasoning \u{1f600}\u{1f601}\nassistant: visible \u{1f600}\u{1f601}\n[bash] "\u{1f600}ab"`,
+      `result: result \u{1f600}`,
+      `user: user \u{1f600}`,
+      `system: system \u{1f600}`,
+    ]);
+  });
+
+  it("positive limits count Unicode code points and cap tool-call arguments, not the wrapper", () => {
+    const policy: SummaryPolicy = {
+      ...DEFAULT_SUMMARY_POLICY,
+      assistantTextMaxChars: 2,
+      reasoningTextMaxChars: 2,
+      toolCallMaxChars: 3,
+    };
+    const rendered = renderSummary([assistant], policy, "manual");
+
+    expect(rendered.actionParts).toEqual([
+      `thinking: re...\nassistant: vi...\n[bash] "\u{1f600}a...`,
+    ]);
+  });
+
+  it("drops an over-limit tool result whole and keeps one at the positive threshold", () => {
+    const units: SummaryUnit[] = [
+      { kind: "assistant", thoughts: [], thinking: [], calls: [] },
+      { kind: "result", text: "\u{1f600}ab" },
+      { kind: "result", text: "\u{1f600}abc" },
+      { kind: "result", text: "  " },
+    ];
+    const rendered = renderSummary(
+      units,
+      { ...DEFAULT_SUMMARY_POLICY, toolResultMaxChars: 3 },
+      "manual",
+    );
+
+    expect(rendered.actionParts).toEqual(["result: \u{1f600}ab"]);
+    expect(rendered.stats.omissions).toMatchObject({ longToolResult: 1, emptyToolResult: 1 });
+  });
+
+  it("positive user limits cap user and system blocks without charging the labels", () => {
+    const rendered = renderSummary(
+      [
+        { kind: "assistant", thoughts: [], thinking: [], calls: [] },
+        { kind: "human", text: "\u{1f600}abc" },
+        { kind: "system", text: "abcd" },
+      ],
+      { ...DEFAULT_SUMMARY_POLICY, userTextMaxChars: 1 },
+      "manual",
+    );
+
+    expect(rendered.actionParts).toEqual(["user: \u{1f600}...", "system: a..."]);
   });
 });
 
@@ -643,17 +822,29 @@ describe("profiles", () => {
     expect(overflow.actionParts[0]).toContain('[bash] {"command":"make"}');
   });
 
-  it("keeps a thought cap tighter than 300 when one is configured", () => {
-    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, thoughtMaxChars: 100 };
+  it("keeps a positive assistant text cap tighter than 300 when configured", () => {
+    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, assistantTextMaxChars: 100 };
     const overflow = renderSummary(units, policy, "overflow");
     expect(overflow.actionParts[0]).toContain(`${"y".repeat(100)}...`);
   });
 
-  it("keeps thinking caps independent of thought caps", () => {
+  it("keeps assistant text omitted at zero during overflow", () => {
+    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, assistantTextMaxChars: 0 };
+    const overflow = renderSummary(units, policy, "overflow");
+    expect(overflow.actionParts).toEqual(['[bash] {"command":"make"}']);
+  });
+
+  it("limits unlimited assistant text to 300 during overflow", () => {
+    const policy: SummaryPolicy = { ...DEFAULT_SUMMARY_POLICY, assistantTextMaxChars: "unlimited" };
+    const overflow = renderSummary(units, policy, "overflow");
+    expect(overflow.actionParts[0]).toContain(`${"y".repeat(300)}...`);
+  });
+
+  it("keeps reasoning caps independent of assistant text caps", () => {
     const policy: SummaryPolicy = {
       ...DEFAULT_SUMMARY_POLICY,
-      thoughtMaxChars: 5,
-      thinkingMaxChars: 9,
+      assistantTextMaxChars: 5,
+      reasoningTextMaxChars: 9,
     };
     const rendered = renderSummary(units, policy, "manual");
     expect(rendered.actionParts[0]).toBe(

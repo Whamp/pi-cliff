@@ -12,7 +12,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { DEFAULT_SUMMARY_POLICY, type SummaryPolicy } from "./cliff.js";
+import { DEFAULT_SUMMARY_POLICY, type CharacterLimit, type SummaryPolicy } from "./cliff.js";
 
 /**
  * Who owns the compaction summary.
@@ -34,7 +34,7 @@ export interface CliffConfig extends SummaryPolicy {
   mode: CliffMode;
 }
 
-/** Upstream's defaults plus `active`, which is what a session with no `cliff.json` anywhere gets. */
+/** Rendering defaults that preserve upstream output, with `active` ownership when no file exists. */
 export const DEFAULT_CLIFF_CONFIG: CliffConfig = { mode: "active", ...DEFAULT_SUMMARY_POLICY };
 
 /** File name Cliff looks for in both directories; deriving the directories is the host glue's job. */
@@ -48,12 +48,12 @@ export const CLIFF_CONFIG_FILE_NAME = "cliff.json";
  */
 export interface CliffConfigSettings {
   mode?: CliffMode;
-  keepThinking?: boolean;
-  thoughtMaxChars?: number;
-  thinkingMaxChars?: number;
-  cmdMaxChars?: number;
-  resultMaxChars?: number;
-  humanMaxChars?: number;
+  includeReasoning?: boolean;
+  assistantTextMaxChars?: CharacterLimit;
+  reasoningTextMaxChars?: CharacterLimit;
+  toolCallMaxChars?: CharacterLimit;
+  toolResultMaxChars?: CharacterLimit;
+  userTextMaxChars?: CharacterLimit;
 }
 
 /** A document that parsed cleanly, carrying only the keys the file actually named. */
@@ -79,7 +79,7 @@ export interface CliffConfigPaths {
 
 /** One resolved value that came from a file rather than from the defaults, for `/cliff` to name. */
 export interface CliffConfigOrigin {
-  key: string;
+  key: keyof CliffConfig;
   path: string;
 }
 
@@ -97,22 +97,69 @@ export interface CliffConfigLoad {
   errors: string[];
 }
 
+/** One documented config key, its command-help meaning, and any retired spelling to diagnose. */
+type CliffConfigOption<Key extends keyof CliffConfig = keyof CliffConfig> = {
+  key: Key;
+  description: string;
+  retiredKey?: string;
+  migrationHint?: string;
+};
+
 /**
- * Every key a `cliff.json` may name, and therefore the whole grammar of the file.
+ * Ordered `cliff.json` keys for validation, `/cliff`, help, and default reporting.
  *
- * An unknown key is an error, so this list is what rejects a misspelling instead of ignoring it.
- * {@link readCliffConfigSetting} switches over exactly these names, which is what ties the list to the
- * readers: a name added here without a reader stops compiling.
+ * The tuple makes each resolved config key appear exactly once. Retired spellings are diagnostics
+ * only; they are never accepted as aliases.
  */
-const CLIFF_CONFIG_KEYS = [
-  "mode",
-  "keepThinking",
-  "thoughtMaxChars",
-  "thinkingMaxChars",
-  "cmdMaxChars",
-  "resultMaxChars",
-  "humanMaxChars",
-] as const;
+export const CLIFF_CONFIG_OPTIONS = [
+  { key: "mode", description: 'Compaction owner: "active", "shadow", or "off".' },
+  {
+    key: "includeReasoning",
+    description: "Include assistant reasoning text.",
+    retiredKey: "keepThinking",
+  },
+  {
+    key: "assistantTextMaxChars",
+    description: "Visible assistant text limit per message.",
+    retiredKey: "thoughtMaxChars",
+    migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
+  },
+  {
+    key: "reasoningTextMaxChars",
+    description: "Reasoning text limit per assistant message.",
+    retiredKey: "thinkingMaxChars",
+    migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
+  },
+  {
+    key: "toolCallMaxChars",
+    description: "Serialized tool-call argument limit, excluding the [toolName] wrapper.",
+    retiredKey: "cmdMaxChars",
+    migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
+  },
+  {
+    key: "toolResultMaxChars",
+    description: "Drop tool results whole when they exceed this limit.",
+    retiredKey: "resultMaxChars",
+    migrationHint: "Legacy 0 still drops every non-empty result.",
+  },
+  {
+    key: "userTextMaxChars",
+    description: "User and system text limit per block, including the carried opening head.",
+    retiredKey: "humanMaxChars",
+    migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
+  },
+] as const satisfies readonly [
+  CliffConfigOption<"mode">,
+  CliffConfigOption<"includeReasoning">,
+  CliffConfigOption<"assistantTextMaxChars">,
+  CliffConfigOption<"reasoningTextMaxChars">,
+  CliffConfigOption<"toolCallMaxChars">,
+  CliffConfigOption<"toolResultMaxChars">,
+  CliffConfigOption<"userTextMaxChars">,
+];
+
+type CliffConfigKey = (typeof CLIFF_CONFIG_OPTIONS)[number]["key"];
+const CLIFF_CONFIG_KEYS: readonly CliffConfigKey[] = CLIFF_CONFIG_OPTIONS.map(({ key }) => key);
 
 /** The mode values, in the order the error message lists them. */
 const CLIFF_MODE_VALUES = ["active", "shadow", "off"] as const satisfies readonly CliffMode[];
@@ -124,47 +171,39 @@ const CLIFF_MODE_VALUES = ["active", "shadow", "off"] as const satisfies readonl
  * downstream works on {@link CliffConfigSettings}. Every problem is collected rather than thrown, so
  * one report names each mistake in the file instead of only the first.
  *
- * `0` is a valid value for every cap, and each cap means something different by it: for the text caps
- * it is unlimited, and for `resultMaxChars` it drops every non-empty tool result. That is upstream's
- * meaning, not a typo, so a `0` is never reported as an error.
+ * Limits accept nonnegative safe integers or the exact `"unlimited"` sentinel. Zero is valid and
+ * retains no content in its category; positive tool-result limits drop oversized results whole.
  */
 export function parseCliffConfig(document: unknown): CliffConfigParse {
   return parseCliffConfigDocument(document, "");
 }
 
-/**
- * Renders one resolved key as text for `/cliff`, or `undefined` for a key this module does not know.
- *
- * The key grammar lives here, so the command that reports the config cannot drift from the parser that
- * produced it, and the switch is exhaustive over {@link CliffConfigSettings} by construction.
- */
-export function describeCliffConfigValue(config: CliffConfig, key: string): string | undefined {
-  switch (key) {
-    case "mode": {
-      return config.mode;
-    }
-    case "keepThinking": {
-      return String(config.keepThinking);
-    }
-    case "thoughtMaxChars": {
-      return String(config.thoughtMaxChars);
-    }
-    case "thinkingMaxChars": {
-      return String(config.thinkingMaxChars);
-    }
-    case "cmdMaxChars": {
-      return String(config.cmdMaxChars);
-    }
-    case "resultMaxChars": {
-      return String(config.resultMaxChars);
-    }
-    case "humanMaxChars": {
-      return String(config.humanMaxChars);
-    }
-    default: {
-      return undefined;
-    }
+/** Formats one resolved config value as text for `/cliff`; only documented keys fit. */
+export function describeCliffConfigValue(config: CliffConfig, key: CliffConfigKey): string {
+  return String(config[key]);
+}
+
+/** Formats the documented keys and strict JSON defaults for `/cliff help`. */
+export function formatCliffConfigHelp(): string {
+  const lines = ["Cliff configuration", "Keys: ~/.pi/agent/cliff.json or <project>/.pi/cliff.json"];
+  for (const option of CLIFF_CONFIG_OPTIONS) {
+    lines.push(
+      `  ${option.key}: ${option.description} Default: ${describeCliffConfigValue(DEFAULT_CLIFF_CONFIG, option.key)}`,
+    );
   }
+  lines.push(
+    'Character limits count Unicode code points. A limit of 0 retains no content in that category; "unlimited" disables the limit.',
+    "Zero omits whole tool-call lines and user/system labels. Positive text limits append an ellipsis after the configured number of code points.",
+    "toolCallMaxChars caps serialized arguments, not the [toolName] wrapper; oversized tool results are dropped whole.",
+    "Precedence: built-in defaults, then the global file, then the project file.",
+    "Pi owns the compaction trigger, cut, kept tail, and persistence; Cliff only renders the summary.",
+    "Default cliff.json:",
+    "```json",
+    JSON.stringify(DEFAULT_CLIFF_CONFIG, null, 2),
+    "```",
+    "Use /cliff to show effective values and their source.",
+  );
+  return lines.join("\n");
 }
 
 /**
@@ -180,23 +219,23 @@ export function mergeCliffConfig(layers: readonly CliffConfigSettings[]): CliffC
     if (settings.mode !== undefined) {
       config.mode = settings.mode;
     }
-    if (settings.keepThinking !== undefined) {
-      config.keepThinking = settings.keepThinking;
+    if (settings.includeReasoning !== undefined) {
+      config.includeReasoning = settings.includeReasoning;
     }
-    if (settings.thoughtMaxChars !== undefined) {
-      config.thoughtMaxChars = settings.thoughtMaxChars;
+    if (settings.assistantTextMaxChars !== undefined) {
+      config.assistantTextMaxChars = settings.assistantTextMaxChars;
     }
-    if (settings.thinkingMaxChars !== undefined) {
-      config.thinkingMaxChars = settings.thinkingMaxChars;
+    if (settings.reasoningTextMaxChars !== undefined) {
+      config.reasoningTextMaxChars = settings.reasoningTextMaxChars;
     }
-    if (settings.cmdMaxChars !== undefined) {
-      config.cmdMaxChars = settings.cmdMaxChars;
+    if (settings.toolCallMaxChars !== undefined) {
+      config.toolCallMaxChars = settings.toolCallMaxChars;
     }
-    if (settings.resultMaxChars !== undefined) {
-      config.resultMaxChars = settings.resultMaxChars;
+    if (settings.toolResultMaxChars !== undefined) {
+      config.toolResultMaxChars = settings.toolResultMaxChars;
     }
-    if (settings.humanMaxChars !== undefined) {
-      config.humanMaxChars = settings.humanMaxChars;
+    if (settings.userTextMaxChars !== undefined) {
+      config.userTextMaxChars = settings.userTextMaxChars;
     }
   }
   return config;
@@ -214,7 +253,7 @@ export function loadCliffConfig(paths: CliffConfigPaths): CliffConfigLoad {
   const layers: CliffConfigSettings[] = [];
   const errors: string[] = [];
   const files: CliffConfigFileState[] = [];
-  const originByKey = new Map<string, string>();
+  const originByKey = new Map<keyof CliffConfig, string>();
   for (const path of [paths.globalPath, paths.projectPath]) {
     const read = readCliffConfigFile(path);
     if (read.state === "absent") {
@@ -228,8 +267,10 @@ export function loadCliffConfig(paths: CliffConfigPaths): CliffConfigLoad {
     }
     files.push({ path, state: "read" });
     layers.push(read.settings);
-    for (const key of Object.keys(read.settings)) {
-      originByKey.set(key, path);
+    for (const { key } of CLIFF_CONFIG_OPTIONS) {
+      if (Object.hasOwn(read.settings, key)) {
+        originByKey.set(key, path);
+      }
     }
   }
   return {
@@ -302,18 +343,22 @@ function parseCliffConfigDocument(document: unknown, label: string): CliffConfig
   const errors: string[] = [];
   for (const key of Object.keys(document)) {
     if (!CLIFF_CONFIG_KEYS.some((known) => known === key)) {
+      const retiredOption = CLIFF_CONFIG_OPTIONS.find(
+        (option) => "retiredKey" in option && option.retiredKey === key,
+      );
       errors.push(
-        cliffProblem(label, `unknown key "${key}"; Cliff knows ${CLIFF_CONFIG_KEYS.join(", ")}`),
+        retiredOption === undefined
+          ? cliffProblem(label, `unknown key "${key}"; Cliff knows ${CLIFF_CONFIG_KEYS.join(", ")}`)
+          : retiredCliffConfigKeyProblem(key, retiredOption, label),
       );
     }
   }
   const settings: CliffConfigSettings = {};
-  for (const key of CLIFF_CONFIG_KEYS) {
-    const raw = document[key];
-    if (raw === undefined) {
+  for (const { key } of CLIFF_CONFIG_OPTIONS) {
+    if (!Object.hasOwn(document, key)) {
       continue;
     }
-    Object.assign(settings, readCliffConfigSetting(key, raw, label, errors));
+    Object.assign(settings, readCliffConfigSetting(key, document[key], label, errors));
   }
   if (errors.length > 0) {
     return { ok: false, errors };
@@ -323,7 +368,7 @@ function parseCliffConfigDocument(document: unknown, label: string): CliffConfig
 
 /** One known key's contribution to a settings patch, or nothing plus a recorded error. */
 function readCliffConfigSetting(
-  key: (typeof CLIFF_CONFIG_KEYS)[number],
+  key: CliffConfigKey,
   raw: unknown,
   label: string,
   errors: string[],
@@ -333,32 +378,32 @@ function readCliffConfigSetting(
       const mode = readCliffMode(raw, label, errors);
       return mode === undefined ? {} : { mode };
     }
-    case "keepThinking": {
-      const keepThinking = readCliffBoolean(key, raw, label, errors);
-      return keepThinking === undefined ? {} : { keepThinking };
+    case "includeReasoning": {
+      const includeReasoning = readCliffBoolean(key, raw, label, errors);
+      return includeReasoning === undefined ? {} : { includeReasoning };
     }
-    case "thoughtMaxChars": {
-      const cap = readCliffCharCap(key, raw, label, errors);
-      return cap === undefined ? {} : { thoughtMaxChars: cap };
+    case "assistantTextMaxChars": {
+      const cap = readCliffCharacterLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { assistantTextMaxChars: cap };
     }
-    case "thinkingMaxChars": {
-      const cap = readCliffCharCap(key, raw, label, errors);
-      return cap === undefined ? {} : { thinkingMaxChars: cap };
+    case "reasoningTextMaxChars": {
+      const cap = readCliffCharacterLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { reasoningTextMaxChars: cap };
     }
-    case "cmdMaxChars": {
-      const cap = readCliffCharCap(key, raw, label, errors);
-      return cap === undefined ? {} : { cmdMaxChars: cap };
+    case "toolCallMaxChars": {
+      const cap = readCliffCharacterLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { toolCallMaxChars: cap };
     }
-    case "resultMaxChars": {
-      const cap = readCliffCharCap(key, raw, label, errors);
-      return cap === undefined ? {} : { resultMaxChars: cap };
+    case "toolResultMaxChars": {
+      const cap = readCliffCharacterLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { toolResultMaxChars: cap };
     }
-    case "humanMaxChars": {
-      const cap = readCliffCharCap(key, raw, label, errors);
-      return cap === undefined ? {} : { humanMaxChars: cap };
+    case "userTextMaxChars": {
+      const cap = readCliffCharacterLimit(key, raw, label, errors);
+      return cap === undefined ? {} : { userTextMaxChars: cap };
     }
     default: {
-      // A name in CLIFF_CONFIG_KEYS with no reader lands here, which is the whole point of the list.
+      // A documented option without an explicit decoder lands here, which keeps parsing exhaustive.
       const unhandled: never = key;
       throw new Error(`Cliff config has no reader for the key ${String(unhandled)}`);
     }
@@ -391,31 +436,41 @@ function readCliffBoolean(
 }
 
 /**
- * Reads one `*MaxChars` cap: a whole number of characters, where `0` is a value rather than an error.
- *
- * The text caps read `0` as unlimited and `resultMaxChars` reads it as "drop every non-empty result",
- * so the validator accepts zero everywhere and leaves the meaning to the render rules.
+ * Reads one character limit: a nonnegative safe integer or the exact `unlimited` sentinel.
  */
-function readCliffCharCap(
+function readCliffCharacterLimit(
   key: string,
   raw: unknown,
   label: string,
   errors: string[],
-): number | undefined {
-  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw)) {
+): CharacterLimit | undefined {
+  if (raw === "unlimited") {
+    return raw;
+  }
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw)) {
     errors.push(
       cliffProblem(
         label,
-        `"${key}" must be a whole number of characters, 0 for unlimited, not ${describeValue(raw)}`,
+        `"${key}" must be a nonnegative safe integer or exact "unlimited", not ${describeValue(raw)}`,
       ),
     );
     return undefined;
   }
   if (raw < 0) {
-    errors.push(cliffProblem(label, `"${key}" must not be negative; 0 means unlimited`));
+    errors.push(cliffProblem(label, `"${key}" must not be negative`));
     return undefined;
   }
   return raw;
+}
+
+/** Gives a retired setting's exact replacement and zero migration guidance. */
+function retiredCliffConfigKeyProblem(
+  key: string,
+  option: CliffConfigOption,
+  label: string,
+): string {
+  const migration = option.migrationHint === undefined ? "" : ` ${option.migrationHint}`;
+  return cliffProblem(label, `retired key "${key}"; use "${option.key}" instead.${migration}`);
 }
 
 function quotedModes(): string {

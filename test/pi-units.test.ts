@@ -158,7 +158,7 @@ describe("user messages", () => {
         timestamp: TIMESTAMP,
       },
     ]);
-    const policy = { ...DEFAULT_SUMMARY_POLICY, humanMaxChars: 10 };
+    const policy = { ...DEFAULT_SUMMARY_POLICY, userTextMaxChars: 10 };
     const rendered = renderSummary(units, policy, "manual");
     expect(rendered.actionParts).toEqual([
       "assistant: working",
