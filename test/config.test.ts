@@ -136,8 +136,22 @@ describe("parseCliffConfig accepts the documented policy", () => {
     ]);
     expect(defaultBlock).toBeDefined();
     expect(JSON.parse(defaultBlock ?? "")).toEqual(DEFAULT_CLIFF_CONFIG);
+    expect(help).toContain("Config files: ~/.pi/agent/cliff.json or <project>/.pi/cliff.json");
     expect(help).toContain(
       "Precedence: built-in defaults, then the global file, then the project file.",
+    );
+    expect(help).toContain(
+      "active: Cliff writes a mechanical summary; Pi does not call its model summarizer.",
+    );
+    expect(help).toContain(
+      "shadow: Cliff computes a comparison summary, then Pi calls its model summarizer.",
+    );
+    expect(help).toContain("off: Cliff is disabled; Pi compacts with its model summarizer.");
+    expect(help).toContain(
+      'When a valid config file selects "off", errors in the other file do not block Pi; /cliff still reports them.',
+    );
+    expect(help).toContain(
+      "reasoningTextMaxChars: Reasoning text limit per assistant message; ignored when includeReasoning is false.",
     );
     expect(help).toContain("Pi owns the compaction trigger, cut, kept tail, and persistence");
   });

@@ -415,7 +415,11 @@ function reportCliffCommand(
   try {
     reportCliffDiagnostic(ctx, buildCliffReport(ctx, dependencies), "info");
   } catch (error) {
-    reportCliffDiagnostic(ctx, `Cliff status report failed: ${describeError(error)}`, "error");
+    reportCliffDiagnostic(
+      ctx,
+      `Cliff status report failed: ${describeError(error)}\nUse /cliff help for settings and a JSON example.`,
+      "error",
+    );
   }
 }
 
@@ -428,7 +432,7 @@ function buildCliffReport(
   try {
     loaded = dependencies.loadConfig(dependencies.resolveConfigPaths(host.cwd));
   } catch (error) {
-    return `Cliff config could not be read: ${describeError(error)}`;
+    return `Cliff config could not be read: ${describeError(error)}\nUse /cliff help for settings and a JSON example.`;
   }
 
   const originByKey = new Map(loaded.origins.map(({ key, path }) => [key, path]));
@@ -447,6 +451,7 @@ function buildCliffReport(
   const branch = host.sessionManager.getBranch();
   lines.push(describeBranchHead(branch));
   lines.push(describeLastReceipt(branch));
+  lines.push("Use /cliff help for settings and a JSON example.");
   return lines.join("\n");
 }
 

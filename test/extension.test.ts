@@ -1,7 +1,11 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createCliffExtension } from "../src/extension.js";
 import {
   DEFAULT_CLIFF_CONFIG,
+  loadCliffConfig,
   type CliffConfig,
   type CliffConfigFileState,
   type CliffConfigOrigin,
@@ -433,6 +437,62 @@ describe("/cliff command", () => {
     expect(harness.notifyCalls).toEqual([{ message: "Usage: /cliff [help]", kind: "warning" }]);
   });
 
+  it("points to help when status cannot read the config", async () => {
+    const harness = makeExtension({ throwLoad: true });
+
+    await runCommand(harness, "");
+
+    expect(harness.notifyCalls[0]?.message).toContain(
+      "Cliff config could not be read: config reader failed",
+    );
+    expect(harness.notifyCalls[0]?.message).toContain(
+      "Use /cliff help for settings and a JSON example.",
+    );
+  });
+
+  it("delegates when project off overrides an invalid global config and reports its migration hint", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cliff-off-config-"));
+    const globalPath = join(directory, "global", "cliff.json");
+    const projectPath = join(directory, "project", ".pi", "cliff.json");
+    try {
+      await mkdir(join(directory, "global"), { recursive: true });
+      await mkdir(join(directory, "project", ".pi"), { recursive: true });
+      await writeFile(globalPath, JSON.stringify({ cmdMaxChars: 0 }), "utf8");
+      await writeFile(projectPath, JSON.stringify({ mode: "off" }), "utf8");
+
+      const loaded = loadCliffConfig({ globalPath, projectPath });
+      expect(loaded.files).toEqual([
+        { path: globalPath, state: "invalid" },
+        { path: projectPath, state: "read" },
+      ]);
+      expect(loaded.config.mode).toBe("off");
+      expect(loaded.origins).toContainEqual({ key: "mode", path: projectPath });
+      expect(loaded.errors).toHaveLength(1);
+      expect(loaded.errors[0]).toContain(
+        'retired key "cmdMaxChars"; use "toolCallMaxChars" instead.',
+      );
+      expect(loaded.errors[0]).toContain('use "unlimited" to preserve it.');
+
+      const harness = makeExtension({
+        config: loaded.config,
+        errors: loaded.errors,
+        origins: loaded.origins,
+        files: loaded.files,
+      });
+      expect(await compact(harness, event())).toBeUndefined();
+      await runCommand(harness, "");
+
+      const status = harness.notifyCalls[0]?.message ?? "";
+      expect(status).toContain(`mode = off (origin: ${projectPath})`);
+      expect(status).toContain(`error: Cliff config ${globalPath}:`);
+      expect(status).toContain('retired key "cmdMaxChars"; use "toolCallMaxChars" instead.');
+      expect(status).toContain('use "unlimited" to preserve it.');
+      expect(status).toContain("Use /cliff help for settings and a JSON example.");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("reports every effective value and its winning origin with the branch status", async () => {
     const globalPath = "/global/cliff.json";
     const projectPath = "/project/.pi/cliff.json";
@@ -473,5 +533,6 @@ describe("/cliff command", () => {
     expect(report).toContain(`file ${projectPath}: read`);
     expect(report).toContain("Last compaction on this branch: none yet");
     expect(report).toContain("Last Cliff receipt: none on this branch");
+    expect(report).toContain("Use /cliff help for settings and a JSON example.");
   });
 });

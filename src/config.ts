@@ -98,12 +98,12 @@ export interface CliffConfigLoad {
 }
 
 /** One documented config key, its command-help meaning, and any retired spelling to diagnose. */
-type CliffConfigOption<Key extends keyof CliffConfig = keyof CliffConfig> = {
+interface CliffConfigOption<Key extends keyof CliffConfig = keyof CliffConfig> {
   key: Key;
   description: string;
   retiredKey?: string;
   migrationHint?: string;
-};
+}
 
 /**
  * Ordered `cliff.json` keys for validation, `/cliff`, help, and default reporting.
@@ -126,7 +126,8 @@ export const CLIFF_CONFIG_OPTIONS = [
   },
   {
     key: "reasoningTextMaxChars",
-    description: "Reasoning text limit per assistant message.",
+    description:
+      "Reasoning text limit per assistant message; ignored when includeReasoning is false.",
     retiredKey: "thinkingMaxChars",
     migrationHint: 'Legacy 0 meant unlimited; use "unlimited" to preserve it.',
   },
@@ -185,13 +186,21 @@ export function describeCliffConfigValue(config: CliffConfig, key: CliffConfigKe
 
 /** Formats the documented keys and strict JSON defaults for `/cliff help`. */
 export function formatCliffConfigHelp(): string {
-  const lines = ["Cliff configuration", "Keys: ~/.pi/agent/cliff.json or <project>/.pi/cliff.json"];
+  const lines = [
+    "Cliff configuration",
+    "Config files: ~/.pi/agent/cliff.json or <project>/.pi/cliff.json",
+  ];
   for (const option of CLIFF_CONFIG_OPTIONS) {
     lines.push(
       `  ${option.key}: ${option.description} Default: ${describeCliffConfigValue(DEFAULT_CLIFF_CONFIG, option.key)}`,
     );
   }
   lines.push(
+    "Modes:",
+    "  active: Cliff writes a mechanical summary; Pi does not call its model summarizer.",
+    "  shadow: Cliff computes a comparison summary, then Pi calls its model summarizer.",
+    "  off: Cliff is disabled; Pi compacts with its model summarizer.",
+    'When a valid config file selects "off", errors in the other file do not block Pi; /cliff still reports them.',
     'Character limits count Unicode code points. A limit of 0 retains no content in that category; "unlimited" disables the limit.',
     "Zero omits whole tool-call lines and user/system labels. Positive text limits append an ellipsis after the configured number of code points.",
     "toolCallMaxChars caps serialized arguments, not the [toolName] wrapper; oversized tool results are dropped whole.",

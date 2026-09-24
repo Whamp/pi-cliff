@@ -46,7 +46,7 @@ The five character limits accept nonnegative safe integers or the exact string `
 
 The old names are rejected, not aliased or rewritten: `keepThinking` → `includeReasoning`, `thoughtMaxChars` → `assistantTextMaxChars`, `thinkingMaxChars` → `reasoningTextMaxChars`, `cmdMaxChars` → `toolCallMaxChars`, `resultMaxChars` → `toolResultMaxChars`, and `humanMaxChars` → `userTextMaxChars`. The old text-limit value `0` meant unlimited; write `"unlimited"` under the new name to preserve that behavior. `resultMaxChars: 0` still means drop every non-empty result, so migrate it to `toolResultMaxChars: 0`.
 
-In `active` mode, bad configuration cancels compaction and tells you why; Cliff never falls back to a model summary silently. In `shadow` and `off`, pi owns compaction. Unknown keys, negative or fractional values, unsafe integers, and limits other than a number or `"unlimited"` are errors.
+In `active` mode, bad configuration cancels compaction and tells you why; Cliff never falls back to a model summary silently. In `shadow` and `off`, pi owns compaction. When a valid config file selects `"off"`, errors in the other file do not block Pi, and `/cliff` reports them. An invalid file is ignored as a whole, including any `mode` value it contains. Unknown keys, negative or fractional values, unsafe integers, and limits other than a number or `"unlimited"` are errors.
 
 ## Who owns what
 
