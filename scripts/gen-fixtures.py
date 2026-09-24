@@ -29,9 +29,10 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_UPSTREAM_SRC = Path.home() / ".cache" / "pi-cliff" / "cliffcompaction" / "src"
@@ -75,8 +76,12 @@ def import_upstream(upstream_src: Path) -> Upstream:
         from cliffcompaction.config import Config
         from cliffcompaction.dialects.anthropic import DIALECT
         from cliffcompaction.dialects.base import SUMMARY_HEADER
-    except ImportError as exc:  # upstream claims stdlib only; a failure here is a bad path
-        raise FixtureError(f"could not import cliffcompaction from {upstream_src}: {exc}") from exc
+    except (
+        ImportError
+    ) as exc:  # upstream claims stdlib only; a failure here is a bad path
+        raise FixtureError(
+            f"could not import cliffcompaction from {upstream_src}: {exc}"
+        ) from exc
     return Upstream(compact, Config, DIALECT, SUMMARY_HEADER)
 
 
@@ -123,7 +128,9 @@ def expand_blocks(blocks: list[dict], *, role: str) -> list[dict]:
             )
         elif kind == "toolCall":
             if role != "assistant":
-                raise FixtureError(f"toolCall blocks belong to assistant messages, not {role}")
+                raise FixtureError(
+                    f"toolCall blocks belong to assistant messages, not {role}"
+                )
             out.append(
                 {
                     "type": "tool_use",
@@ -150,9 +157,15 @@ def to_anthropic_message(message: dict, summary_header: str) -> dict:
     if role == "human":
         return {"role": "user", "content": expand_blocks(message["blocks"], role=role)}
     if role == "assistant":
-        return {"role": "assistant", "content": expand_blocks(message["blocks"], role=role)}
+        return {
+            "role": "assistant",
+            "content": expand_blocks(message["blocks"], role=role),
+        }
     if role == "system":
-        return {"role": "system", "content": expand_blocks(message["blocks"], role=role)}
+        return {
+            "role": "system",
+            "content": expand_blocks(message["blocks"], role=role),
+        }
     if role == "toolResult":
         return {
             "role": "user",
@@ -160,13 +173,18 @@ def to_anthropic_message(message: dict, summary_header: str) -> dict:
                 {
                     "type": "tool_result",
                     "tool_use_id": message["toolUseId"],
-                    "content": expand_blocks(message.get("content", []), role="toolResult"),
+                    "content": expand_blocks(
+                        message.get("content", []), role="toolResult"
+                    ),
                 }
             ],
         }
     if role == "previousSummary":
         # Upstream recognises its own summaries by this marker alone.
-        return {"role": "user", "content": f"{summary_header}\n\n{expand_text(message['text'])}"}
+        return {
+            "role": "user",
+            "content": f"{summary_header}\n\n{expand_text(message['text'])}",
+        }
     raise FixtureError(f"unknown message role {role!r}")
 
 
@@ -202,7 +220,9 @@ def expected_head_len(messages: list[dict]) -> int:
 
 def summarise(case: dict, upstream: Upstream, config: Any) -> str:
     """Compact one case and return the summary text upstream wrote for it."""
-    messages = [to_anthropic_message(m, upstream.summary_header) for m in case["messages"]]
+    messages = [
+        to_anthropic_message(m, upstream.summary_header) for m in case["messages"]
+    ]
     result = upstream.compact(messages, upstream.dialect, config)
     name = case["name"]
     if result is None:
@@ -218,7 +238,9 @@ def summarise(case: dict, upstream: Upstream, config: Any) -> str:
         )
     summary_content = result.summary["content"]
     if not isinstance(summary_content, str):
-        raise FixtureError(f"{name}: expected a string summary, got {type(summary_content)}")
+        raise FixtureError(
+            f"{name}: expected a string summary, got {type(summary_content)}"
+        )
     return summary_content
 
 
@@ -252,7 +274,9 @@ def main() -> int:
         help="path to the cliffcompaction clone's src directory (overrides CLIFF_UPSTREAM_SRC)",
     )
     parser.add_argument(
-        "--inputs", default=str(REPO_ROOT / "test/fixtures/inputs.json"), help="fixture input set"
+        "--inputs",
+        default=str(REPO_ROOT / "test/fixtures/inputs.json"),
+        help="fixture input set",
     )
     parser.add_argument(
         "--expected",
@@ -295,7 +319,8 @@ def main() -> int:
         "cases": expected,
     }
     Path(args.expected).write_text(
-        json.dumps(output, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(output, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
     )
     print(f"wrote {args.expected}")
     return 0
