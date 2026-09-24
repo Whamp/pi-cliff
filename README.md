@@ -16,36 +16,37 @@ Restart pi. Cliff now handles every compaction request with a mechanical summary
 
 ## Configure
 
-Optional. Upstream's defaults apply when nothing is present.
+Optional. Cliff's defaults apply when neither config file is present. Create `~/.pi/agent/cliff.json`:
 
-```jsonc
-// ~/.pi/agent/cliff.json
+```json
 {
   "mode": "active",
-  "keepThinking": true,
-  "thoughtMaxChars": 0,
-  "thinkingMaxChars": 0,
-  "cmdMaxChars": 150,
-  "resultMaxChars": 500,
-  "humanMaxChars": 20000,
+  "includeReasoning": true,
+  "assistantTextMaxChars": "unlimited",
+  "reasoningTextMaxChars": "unlimited",
+  "toolCallMaxChars": 150,
+  "toolResultMaxChars": 500,
+  "userTextMaxChars": 20000
 }
 ```
 
-Add `<project>/.pi/cliff.json` to override a single project. Project wins over global.
+Add `<project>/.pi/cliff.json` to override values for one project. Project settings override global settings, which override the built-in defaults.
 
-| Key                | Default  | Meaning                                                         |
-| ------------------ | -------- | --------------------------------------------------------------- |
-| `mode`             | `active` | `active`, `shadow`, or `off`                                    |
-| `keepThinking`     | `true`   | Include assistant thinking in the summary                       |
-| `thoughtMaxChars`  | `0`      | Cap per assistant message. `0` means no cap                     |
-| `thinkingMaxChars` | `0`      | Separate cap for thinking                                      |
-| `cmdMaxChars`      | `150`    | Cap for a tool call and its arguments                           |
-| `resultMaxChars`   | `500`    | Tool results longer than this are dropped instead of shortened |
-| `humanMaxChars`    | `20000`  | Cap for your own messages and system instructions               |
+| Key                      | Default       | Meaning                                                                      |
+| ------------------------ | ------------- | ---------------------------------------------------------------------------- |
+| `mode`                   | `active`      | `active`, `shadow`, or `off`                                                  |
+| `includeReasoning`       | `true`        | Include assistant reasoning text                                             |
+| `assistantTextMaxChars`  | `"unlimited"` | Limit visible assistant text per message                                    |
+| `reasoningTextMaxChars`  | `"unlimited"` | Limit reasoning text per assistant message                                  |
+| `toolCallMaxChars`       | `150`         | Limit serialized tool-call arguments, not the `[toolName]` wrapper           |
+| `toolResultMaxChars`     | `500`         | Drop tool results whole when they exceed this limit                         |
+| `userTextMaxChars`       | `20000`       | Limit user and system text per block, including the carried opening head    |
 
-A `0` is unlimited for the caps, except `resultMaxChars: 0`, which drops every non-empty result. That is upstream's meaning.
+The five character limits accept nonnegative safe integers or the exact string `"unlimited"`. They count Unicode code points. A limit of `0` keeps no content in its category: it omits whole tool-call lines and user/system labels as needed. `"unlimited"` disables the limit. Positive text limits append `...` after the cap; tool results are never truncated, and a result above a positive limit is dropped whole. A tool-call limit applies to serialized arguments only, not the `[toolName]` wrapper.
 
-In `active` mode, bad configuration cancels compaction and tells you why; it never falls back to a model summary silently. In `shadow` and `off`, pi owns the compaction. Unknown keys, negative values, and non-integer caps are all errors.
+The old names are rejected, not aliased or rewritten: `keepThinking` → `includeReasoning`, `thoughtMaxChars` → `assistantTextMaxChars`, `thinkingMaxChars` → `reasoningTextMaxChars`, `cmdMaxChars` → `toolCallMaxChars`, `resultMaxChars` → `toolResultMaxChars`, and `humanMaxChars` → `userTextMaxChars`. The old text-limit value `0` meant unlimited; write `"unlimited"` under the new name to preserve that behavior. `resultMaxChars: 0` still means drop every non-empty result, so migrate it to `toolResultMaxChars: 0`.
+
+In `active` mode, bad configuration cancels compaction and tells you why; Cliff never falls back to a model summary silently. In `shadow` and `off`, pi owns compaction. Unknown keys, negative or fractional values, unsafe integers, and limits other than a number or `"unlimited"` are errors.
 
 ## Who owns what
 
@@ -78,12 +79,13 @@ In `shadow` and `off`, Cliff delegates to pi. If something in Cliff is breaking 
 
 ```text
 /compact            # compact now
-/cliff              # resolved config, file sources, and branch head status
+/cliff              # effective config, winning sources, and branch status
+/cliff help         # config keys, semantics, precedence, and copyable defaults
 ```
 
 `/compact focus on the tests` asks a mechanical summariser to do something it cannot. Cliff compacts with the normal rules and reports that the instructions were ignored.
 
-After an active Cliff compaction you get a short committed-status line. `/cliff` shows the resolved mode, config sources, current branch's carried-head status, and the latest optional shadow or cancellation receipt. The compaction entry stores only `{version, head}` under `details.cliff`; optional receipts and statistics never gate head restoration.
+After an active Cliff compaction you get a short committed-status line. `/cliff` shows every effective value and its winning built-in, global-file, or project-file origin, plus file, head, and receipt status. `/cliff help` works even when a config file is malformed. The compaction entry stores only `{version, head}` under `details.cliff`; optional receipts and statistics never gate head restoration.
 
 ## What you lose against the proxy
 

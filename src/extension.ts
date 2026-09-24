@@ -21,8 +21,10 @@ import {
 import { assembleSummary, headRegionEnd, renderSummary, type SummaryUnit } from "./cliff.js";
 import {
   CLIFF_CONFIG_FILE_NAME,
+  CLIFF_CONFIG_OPTIONS,
   DEFAULT_CLIFF_CONFIG,
   describeCliffConfigValue,
+  formatCliffConfigHelp,
   loadCliffConfig,
   type CliffConfig,
   type CliffConfigLoad,
@@ -401,7 +403,15 @@ function reportCliffCommand(
   dependencies: CliffExtensionDependencies,
   args: string,
 ): void {
-  void args;
+  const commandArgs = args.trim();
+  if (commandArgs === "help") {
+    reportCliffDiagnostic(ctx, formatCliffConfigHelp(), "info");
+    return;
+  }
+  if (commandArgs !== "") {
+    reportCliffDiagnostic(ctx, "Usage: /cliff [help]", "warning");
+    return;
+  }
   try {
     reportCliffDiagnostic(ctx, buildCliffReport(ctx, dependencies), "info");
   } catch (error) {
@@ -421,13 +431,12 @@ function buildCliffReport(
     return `Cliff config could not be read: ${describeError(error)}`;
   }
 
-  const lines = [`Cliff mode: ${loaded.config.mode}`];
-  if (loaded.origins.length === 0) {
-    lines.push("  every key is a built-in default");
-  }
-  for (const origin of loaded.origins) {
-    const value = describeCliffConfigValue(loaded.config, origin.key) ?? "(unrecognised key)";
-    lines.push(`  ${origin.key} = ${value} from ${origin.path}`);
+  const originByKey = new Map(loaded.origins.map(({ key, path }) => [key, path]));
+  const lines = ["Cliff configuration:"];
+  for (const { key } of CLIFF_CONFIG_OPTIONS) {
+    const value = describeCliffConfigValue(loaded.config, key);
+    const origin = originByKey.get(key) ?? "built-in default";
+    lines.push(`  ${key} = ${value} (origin: ${origin})`);
   }
   for (const file of loaded.files) {
     lines.push(`  file ${file.path}: ${file.state}`);

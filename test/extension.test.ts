@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCliffExtension } from "../src/extension.js";
-import { DEFAULT_CLIFF_CONFIG, type CliffMode } from "../src/config.js";
+import {
+  DEFAULT_CLIFF_CONFIG,
+  type CliffConfig,
+  type CliffConfigFileState,
+  type CliffConfigOrigin,
+  type CliffMode,
+} from "../src/config.js";
 import type {
   ExtensionCommandContext,
   ExtensionContext,
@@ -12,7 +18,17 @@ import type { PiAgentMessage } from "../src/pi-units.js";
 
 const TIMESTAMP = 1_700_000_000_000;
 
-function makeExtension(options: { mode?: CliffMode; errors?: string[]; throwLoad?: boolean } = {}) {
+function makeExtension(
+  options: {
+    mode?: CliffMode;
+    errors?: string[];
+    throwLoad?: boolean;
+    config?: Partial<CliffConfig>;
+    origins?: CliffConfigOrigin[];
+    files?: CliffConfigFileState[];
+    branch?: SessionEntry[];
+  } = {},
+) {
   type BeforeHandler = (
     input: SessionBeforeCompactEvent,
     context: ExtensionContext,
@@ -24,6 +40,7 @@ function makeExtension(options: { mode?: CliffMode; errors?: string[]; throwLoad
   let commandHandler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
   let failAppend = false;
   let loadCalls = 0;
+  let branchCalls = 0;
   const dependencies = {
     resolveConfigPaths: () => ({
       globalPath: "/global/cliff.json",
@@ -35,9 +52,13 @@ function makeExtension(options: { mode?: CliffMode; errors?: string[]; throwLoad
         throw new Error("config reader failed");
       }
       return {
-        config: { ...DEFAULT_CLIFF_CONFIG, mode: options.mode ?? "active" },
-        origins: [],
-        files: [],
+        config: {
+          ...DEFAULT_CLIFF_CONFIG,
+          ...options.config,
+          mode: options.mode ?? options.config?.mode ?? "active",
+        },
+        origins: options.origins ?? [],
+        files: options.files ?? [],
         errors: options.errors ?? [],
       };
     },
@@ -80,7 +101,12 @@ function makeExtension(options: { mode?: CliffMode; errors?: string[]; throwLoad
       },
     },
     model: { contextWindow: 64 },
-    sessionManager: { getBranch: () => [] },
+    sessionManager: {
+      getBranch: () => {
+        branchCalls += 1;
+        return options.branch ?? [];
+      },
+    },
   } as unknown as ExtensionContext;
   return {
     before: handlers.get("session_before_compact"),
@@ -91,11 +117,15 @@ function makeExtension(options: { mode?: CliffMode; errors?: string[]; throwLoad
       return notificationAttempts;
     },
     context,
+    commandContext: context as unknown as ExtensionCommandContext,
     dependencies,
     receipts,
     notifyCalls,
     get loadCalls() {
       return loadCalls;
+    },
+    get branchCalls() {
+      return branchCalls;
     },
     setNotificationError(error: Error | undefined) {
       notificationError = error;
@@ -181,6 +211,13 @@ async function compact(
     throw new Error("session_before_compact handler was not registered");
   }
   return await harness.before(input, harness.context);
+}
+
+async function runCommand(harness: ReturnType<typeof makeExtension>, args: string): Promise<void> {
+  if (harness.command === undefined) {
+    throw new Error("Cliff test: /cliff command was not registered");
+  }
+  await harness.command(args, harness.commandContext);
 }
 
 describe("native compaction hook", () => {
@@ -367,5 +404,74 @@ describe("native compaction hook", () => {
     const result = await compact(harness, event());
 
     expect(result).toEqual({ cancel: true });
+  });
+});
+
+describe("/cliff command", () => {
+  it("shows help without reading config or querying the session", async () => {
+    const harness = makeExtension({ throwLoad: true });
+
+    await runCommand(harness, "help");
+
+    expect(harness.loadCalls).toBe(0);
+    expect(harness.branchCalls).toBe(0);
+    expect(harness.notifyCalls).toHaveLength(1);
+    expect(harness.notifyCalls[0]?.message).toContain('"unlimited" disables the limit');
+    expect(harness.notifyCalls[0]?.message).toContain('"toolCallMaxChars"');
+    expect(harness.notifyCalls[0]?.message).toContain('"toolResultMaxChars"');
+    expect(harness.notifyCalls[0]?.message).toContain("```json");
+    expect(harness.notifyCalls[0]?.message).toContain("Precedence: built-in defaults");
+  });
+
+  it("returns usage for unknown args instead of showing status", async () => {
+    const harness = makeExtension({ throwLoad: true });
+
+    await runCommand(harness, "anything");
+
+    expect(harness.loadCalls).toBe(0);
+    expect(harness.branchCalls).toBe(0);
+    expect(harness.notifyCalls).toEqual([{ message: "Usage: /cliff [help]", kind: "warning" }]);
+  });
+
+  it("reports every effective value and its winning origin with the branch status", async () => {
+    const globalPath = "/global/cliff.json";
+    const projectPath = "/project/.pi/cliff.json";
+    const harness = makeExtension({
+      config: {
+        mode: "shadow",
+        includeReasoning: false,
+        assistantTextMaxChars: 0,
+        reasoningTextMaxChars: "unlimited",
+        toolCallMaxChars: 15,
+        toolResultMaxChars: 0,
+        userTextMaxChars: 200,
+      },
+      origins: [
+        { key: "mode", path: globalPath },
+        { key: "reasoningTextMaxChars", path: globalPath },
+        { key: "toolCallMaxChars", path: projectPath },
+      ],
+      files: [
+        { path: globalPath, state: "read" },
+        { path: projectPath, state: "read" },
+      ],
+    });
+
+    await runCommand(harness, "");
+
+    expect(harness.loadCalls).toBe(1);
+    expect(harness.branchCalls).toBe(1);
+    const report = harness.notifyCalls[0]?.message ?? "";
+    expect(report).toContain(`mode = shadow (origin: ${globalPath})`);
+    expect(report).toContain("includeReasoning = false (origin: built-in default)");
+    expect(report).toContain("assistantTextMaxChars = 0 (origin: built-in default)");
+    expect(report).toContain(`reasoningTextMaxChars = unlimited (origin: ${globalPath})`);
+    expect(report).toContain(`toolCallMaxChars = 15 (origin: ${projectPath})`);
+    expect(report).toContain("toolResultMaxChars = 0 (origin: built-in default)");
+    expect(report).toContain("userTextMaxChars = 200 (origin: built-in default)");
+    expect(report).toContain(`file ${globalPath}: read`);
+    expect(report).toContain(`file ${projectPath}: read`);
+    expect(report).toContain("Last compaction on this branch: none yet");
+    expect(report).toContain("Last Cliff receipt: none on this branch");
   });
 });

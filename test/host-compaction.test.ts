@@ -434,6 +434,80 @@ async function withHarness(test: (harness: PiHarness) => Promise<void>): Promise
 }
 
 describe("real Pi SDK compaction integration", () => {
+  it("dispatches /cliff help through Pi when config is malformed without calling a model", async () => {
+    await withHarness(async (harness) => {
+      const host = await makeSession(harness, {
+        configText: "{ invalid json",
+        throwingNotify: true,
+      });
+      let output = "";
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        output += String(chunk);
+        return true;
+      });
+      try {
+        const before = measure(harness);
+        await host.session.prompt("/cliff help");
+        const defaultJson = output.match(/```json\n([\s\S]*?)\n```/)?.[1];
+
+        expect(output).toContain("Cliff configuration");
+        expect(output).toContain('"unlimited" disables the limit');
+        expect(output).not.toContain("is not valid JSON");
+        expect(defaultJson).toBeDefined();
+        expect(JSON.parse(defaultJson ?? "")).toEqual({
+          mode: "active",
+          includeReasoning: true,
+          assistantTextMaxChars: "unlimited",
+          reasoningTextMaxChars: "unlimited",
+          toolCallMaxChars: 150,
+          toolResultMaxChars: 500,
+          userTextMaxChars: 20_000,
+        });
+        expect(measure(harness)).toEqual(before);
+        expect(harness.network.fetch).toEqual([]);
+        expect(harness.network.sockets).toEqual([]);
+      } finally {
+        stderr.mockRestore();
+        host.session.dispose();
+      }
+    });
+  });
+  it("dispatches /cliff status through Pi with every effective value and origin", async () => {
+    await withHarness(async (harness) => {
+      const projectPath = join(harness.root, `project-${harness.nextProject}`, ".pi", "cliff.json");
+      const globalPath = join(harness.agentDir, "cliff.json");
+      const host = await makeSession(harness, { throwingNotify: true });
+      let output = "";
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        output += String(chunk);
+        return true;
+      });
+      try {
+        const before = measure(harness);
+        await host.session.prompt("/cliff");
+
+        expect(output).toContain("Cliff configuration:");
+        expect(output).toContain("mode = active (origin: built-in default)");
+        expect(output).toContain("includeReasoning = true (origin: built-in default)");
+        expect(output).toContain("assistantTextMaxChars = unlimited (origin: built-in default)");
+        expect(output).toContain("reasoningTextMaxChars = unlimited (origin: built-in default)");
+        expect(output).toContain("toolCallMaxChars = 150 (origin: built-in default)");
+        expect(output).toContain("toolResultMaxChars = 500 (origin: built-in default)");
+        expect(output).toContain("userTextMaxChars = 20000 (origin: built-in default)");
+        expect(output).toContain(`file ${globalPath}: absent`);
+        expect(output).toContain(`file ${projectPath}: absent`);
+        expect(output).toContain("Last compaction on this branch: none yet");
+        expect(output).toContain("Last Cliff receipt: none on this branch");
+        expect(measure(harness)).toEqual(before);
+        expect(harness.network.fetch).toEqual([]);
+        expect(harness.network.sockets).toEqual([]);
+      } finally {
+        stderr.mockRestore();
+        host.session.dispose();
+      }
+    });
+  });
+
   it("uses Pi's cut and count and preserves its projected tail and opening head over three cycles", async () => {
     await withHarness(async (harness) => {
       const host = await makeSession(harness);
@@ -499,6 +573,42 @@ describe("real Pi SDK compaction integration", () => {
         expect(thirdResult.summary).toContain(OPENING_TASK);
 
         expect(measure(harness)).toEqual(beforeFirst);
+        expect(harness.network.fetch).toEqual([]);
+        expect(harness.network.sockets).toEqual([]);
+      } finally {
+        host.session.dispose();
+      }
+    });
+  });
+
+  it("applies zero and unlimited policy values through the real Pi compaction hook", async () => {
+    await withHarness(async (harness) => {
+      const host = await makeSession(harness, {
+        configText: JSON.stringify({
+          includeReasoning: false,
+          assistantTextMaxChars: 0,
+          reasoningTextMaxChars: "unlimited",
+          toolCallMaxChars: 0,
+          toolResultMaxChars: 0,
+          userTextMaxChars: "unlimited",
+        }),
+      });
+      try {
+        const before = measure(harness);
+        const result = await host.session.compact();
+        const entry = latestCompaction(host.sessionManager);
+
+        expect(result.summary).toContain(`user: ${OPENING_TASK}`);
+        expect(result.summary).not.toContain("assistant:");
+        expect(result.summary).not.toContain("thinking:");
+        expect(result.summary).not.toContain("[read]");
+        expect(result.summary).not.toContain("[bash]");
+        expect(result.summary).not.toContain("result:");
+        expect(cliffDetails(entry)).toEqual({
+          version: 1,
+          head: [{ kind: "human", text: OPENING_TASK }],
+        });
+        expect(measure(harness)).toEqual(before);
         expect(harness.network.fetch).toEqual([]);
         expect(harness.network.sockets).toEqual([]);
       } finally {
