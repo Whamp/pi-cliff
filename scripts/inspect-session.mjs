@@ -58,9 +58,24 @@ const summary = String(compaction.summary ?? "");
 const details = compaction.details?.cliff;
 
 check("summary starts with upstream's header", summary.startsWith(SUMMARY_HEADER));
+const validHeadRecord =
+  details !== undefined &&
+  details !== null &&
+  typeof details === "object" &&
+  !Array.isArray(details) &&
+  details.version === 1 &&
+  Array.isArray(details.head) &&
+  Object.keys(details).sort().join(",") === "head,version" &&
+  details.head.every(
+    (unit) =>
+      unit !== null &&
+      typeof unit === "object" &&
+      (unit.kind === "human" || unit.kind === "system") &&
+      typeof unit.text === "string",
+  );
 check(
-  "details.cliff is present",
-  details !== undefined,
+  "details.cliff is a minimal durable head record",
+  validHeadRecord,
   JSON.stringify(details ?? null).slice(0, 200),
 );
 check(

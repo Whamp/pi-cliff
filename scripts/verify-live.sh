@@ -5,8 +5,9 @@
 #   scripts/verify-live.sh                      # uses the local server60 model
 #   PI_MODEL_ARGS="--provider x --model y" scripts/verify-live.sh
 #
-# Nothing here writes to ~/.pi. The extension is loaded per-run with -e and the
-# project config lives in a throwaway directory.
+# Nothing here installs or edits anything under ~/.pi. Ambient extension discovery
+# is disabled; Cliff is loaded explicitly, and project settings/session data live
+# in a throwaway directory.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -46,9 +47,10 @@ cd "$work"
 # shellcheck disable=SC2086
 pi $model_args \
   --approve \
+  --no-extensions \
   --no-context-files --no-skills \
   --session-dir "$work/sessions" \
-  -e "$repo/src/extension.ts" \
+  --extension "$repo/src/extension.ts" \
   -p "$prompt"
 
 session="$(ls -t "$work"/sessions/*.jsonl | head -1)"

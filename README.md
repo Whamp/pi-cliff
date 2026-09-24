@@ -2,9 +2,9 @@
 
 Mechanical context compaction for [pi](https://github.com/badlogic/pi-mono), ported from [CliffCompaction](NOTICE.md).
 
-When pi decides your conversation is too long, it asks a model to write a summary of the older turns. Cliff replaces that summary with one built from the messages themselves. No model call. No new API cost. The summary lists what the assistant said, what it thought, which tools it called with which arguments, and which tool results were short enough to keep. Long tool outputs, images, and the previous summary are dropped, which is the whole point.
+In `active` mode, when pi compacts a conversation, Cliff replaces the model-written summary with one built from the messages themselves. No model call. No new API cost. The summary lists what the assistant said, what it thought, which tools it called with which arguments, and which tool results were short enough to keep. Long tool outputs, images, and the previous summary are dropped, which is the whole point. `shadow` and `off` leave pi's model summariser in control.
 
-It is a port of the compaction mechanism from an HTTP proxy into a pi extension. `docs/design.md` records what carried over, what pi cannot express, and what was deliberately not ported.
+It is a port of the compaction mechanism from an HTTP proxy into a pi extension. Bash executions and branch summaries use Pi's own `convertToLlm` projection; `docs/design.md` records what carried over, what pi cannot express, and what was deliberately not ported.
 
 ## Install
 
@@ -12,7 +12,7 @@ It is a port of the compaction mechanism from an HTTP proxy into a pi extension.
 pi install /path/to/pi-cliff
 ```
 
-Restart pi. Cliff now produces the summary for every compaction, automatic or manual.
+Restart pi. Cliff now handles every compaction request with a mechanical summary in `active` mode.
 
 ## Configure
 
@@ -33,19 +33,19 @@ Optional. Upstream's defaults apply when nothing is present.
 
 Add `<project>/.pi/cliff.json` to override a single project. Project wins over global.
 
-| Key                | Default  | Meaning                                                           |
-| ------------------ | -------- | ----------------------------------------------------------------- |
-| `mode`             | `active` | `active`, `shadow`, or `off`                                      |
-| `keepThinking`     | `true`   | Include assistant thinking in the summary                         |
-| `thoughtMaxChars`  | `0`      | Cap per assistant message. `0` means no cap                       |
-| `thinkingMaxChars` | `0`      | Separate cap for thinking                                         |
-| `cmdMaxChars`      | `150`    | Cap for a tool call and its arguments                             |
-| `resultMaxChars`   | `500`    | Tool results longer than this are dropped instead of shortened    |
-| `humanMaxChars`    | `20000`  | Cap for your own messages and for instructions in system messages |
+| Key                | Default  | Meaning                                                         |
+| ------------------ | -------- | --------------------------------------------------------------- |
+| `mode`             | `active` | `active`, `shadow`, or `off`                                    |
+| `keepThinking`     | `true`   | Include assistant thinking in the summary                       |
+| `thoughtMaxChars`  | `0`      | Cap per assistant message. `0` means no cap                     |
+| `thinkingMaxChars` | `0`      | Separate cap for thinking                                      |
+| `cmdMaxChars`      | `150`    | Cap for a tool call and its arguments                           |
+| `resultMaxChars`   | `500`    | Tool results longer than this are dropped instead of shortened |
+| `humanMaxChars`    | `20000`  | Cap for your own messages and system instructions               |
 
 A `0` is unlimited for the caps, except `resultMaxChars: 0`, which drops every non-empty result. That is upstream's meaning.
 
-Bad configuration cancels compaction and tells you why. It never falls back to a model summary silently. Unknown keys, negative values, and non-integer caps are all errors.
+In `active` mode, bad configuration cancels compaction and tells you why; it never falls back to a model summary silently. In `shadow` and `off`, pi owns the compaction. Unknown keys, negative values, and non-integer caps are all errors.
 
 ## Who owns what
 
@@ -64,49 +64,47 @@ There is no `thresholdTokens` and no `keepRecent` here on purpose. Upstream need
 
 `active` is the default. Cliff writes the summary and pi persists it.
 
-`shadow` computes the summary and reports what it would have written, then leaves pi alone and pi compacts as usual. Use it to compare the two on the same trigger and the same cut before trusting `active`. Note that the no-model guarantee describes `active`; in `shadow` pi's own summariser still runs.
+`shadow` computes the summary for comparison, then delegates to pi. Pi's model summariser still runs, so the no-model guarantee applies only to `active` mode.
 
 `off` returns control to pi entirely.
 
 ## Failure
 
-If Cliff cannot build a summary, it cancels that compaction and says so. Your history is untouched. It never substitutes a degraded summary and never calls a model.
+If Cliff cannot read active-mode config, project Pi's selected messages, restore its own opening head, render a summary, or honor an abort, it cancels that compaction and reports why. History is unchanged. It never substitutes a degraded summary or falls through to Pi's model summariser. Optional notifications and outcome receipts are isolated: their failure cannot hand control to the model summariser.
 
-The faithful analogue of upstream's fail-open is to change nothing, and an uncompacted context can still be rejected by the provider. That is also what upstream does. If something in Cliff is breaking and you need compaction back immediately, set `mode: "off"`.
+In `shadow` and `off`, Cliff delegates to pi. If something in Cliff is breaking and you need compaction back immediately, set `mode` to `"off"`.
 
 ## Using it
 
-```
+```text
 /compact            # compact now
-/cliff              # resolved config, file sources, last outcome on this branch
+/cliff              # resolved config, file sources, and branch head status
 ```
 
 `/compact focus on the tests` asks a mechanical summariser to do something it cannot. Cliff compacts with the normal rules and reports that the instructions were ignored.
 
-After a compaction you get a line like this:
-
-```
-Cliff: mechanical summary · 18 messages · 7 long results dropped · 4812 chars
-```
-
-`/cliff` reads committed session state, so it still answers after a resume or a branch switch. It reports what was dropped, how large the summary is, and any degradation. It does not claim token savings inferred from character counts.
+After an active Cliff compaction you get a short committed-status line. `/cliff` shows the resolved mode, config sources, current branch's carried-head status, and the latest optional shadow or cancellation receipt. The compaction entry stores only `{version, head}` under `details.cliff`; optional receipts and statistics never gate head restoration.
 
 ## What you lose against the proxy
 
 - The opening turns are preserved as text inside the summary, and carried forward across later compactions. Their original message roles, boundaries, and any images in them are not. pi stores one summary plus one contiguous suffix, so there is no slot for a separate opening block.
 - Upstream keeps three recent assistant turns. pi keeps a token budget instead.
-- Upstream retries a provider rejection by shedding more context. Here pi gets one recovery attempt, where Cliff drops thinking, caps assistant text at 300 characters, and evicts the oldest summary parts to fit what is left.
+- Upstream retries a provider rejection by shedding more context. Here pi owns overflow recovery; Cliff uses only its lean renderer policy (drop thinking and cap assistant text at 300 characters), without estimating a provider-fit budget or evicting summary parts. The result may still exceed the provider's limit.
 - Upstream's `cliff watch` terminal view has no equivalent. `/cliff` and the session file are what you get.
 
 ## Verify
 
 ```bash
-pnpm check              # types, lint, format, unit and fixture tests
-python3 scripts/gen-fixtures.py   # regenerate the upstream goldens
-scripts/verify-live.sh  # one real pi session, then assert the session file
+pnpm check
+python3 scripts/gen-fixtures.py
+scripts/verify-live.sh  # optional live-model verification; not part of the offline check
 ```
 
-`gen-fixtures.py` calls upstream's own `compact()` and stores the resulting strings as the expectation for the TypeScript renderer, so fidelity is measured rather than claimed. `verify-live.sh` runs a real pi session against a local model, forces pi to compact, and asserts on the resulting session file. See the script header for pointing it at a different model.
+`pnpm check` runs TypeScript, type-aware Oxlint, formatting, the upstream renderer fixtures, and the real-Pi SDK integration tests. The SDK tests exercise manual `session.compact()` with model/network tripwires; automatic threshold and overflow behavior are covered at the direct hook boundary only. No live model is called by the offline suite.
+
+`gen-fixtures.py` calls upstream's own `compact()` and stores the resulting strings as the renderer oracle. Select a clone with `--upstream-src` or `CLIFF_UPSTREAM_SRC`; with neither, it uses `~/.cache/pi-cliff/cliffcompaction/src`. The checked-in provenance records the source selector and upstream revision, not a machine-specific absolute path.
+
+`verify-live.sh` is separate from offline validation. It disables ambient extension discovery, explicitly loads Cliff, and uses a throwaway project settings directory and session directory; it does not install or edit anything under `~/.pi`. It still runs the selected live model and is not part of `pnpm check`.
 
 ## Out of scope
 
