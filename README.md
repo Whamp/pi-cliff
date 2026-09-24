@@ -104,7 +104,7 @@ scripts/verify-live.sh  # optional live-model verification; not part of the offl
 
 `gen-fixtures.py` calls upstream's own `compact()` and stores the resulting strings as the renderer oracle. Select a clone with `--upstream-src` or `CLIFF_UPSTREAM_SRC`; with neither, it uses `~/.cache/pi-cliff/cliffcompaction/src`. The checked-in provenance records the source selector and upstream revision, not a machine-specific absolute path.
 
-`verify-live.sh` is separate from offline validation. It disables ambient extension discovery, explicitly loads Cliff, and uses a throwaway project settings directory and session directory; it does not install or edit anything under `~/.pi`. It still runs the selected live model and is not part of `pnpm check`.
+`verify-live.sh` is separate from offline validation. It disables ambient extension discovery, explicitly loads Cliff, and uses throwaway project settings, session, and agent directories; it does not install or edit anything under `~/.pi`. Needed model/auth files are copied only into the private temporary agent directory and removed on exit. The script preserves `run.log` and session JSONL under `/tmp/pi-cliff-verify-evidence-*` (or `CLIFF_LIVE_ARTIFACT_DIR`). It still runs the selected live model and is not part of `pnpm check`.
 
 ## Out of scope
 
