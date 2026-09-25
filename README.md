@@ -14,6 +14,14 @@ pi install git:github.com/Whamp/pi-cliff
 
 Restart pi. Cliff now handles every compaction request with a mechanical summary in `active` mode.
 
+To try Cliff for one Pi invocation without adding it to your settings, run:
+
+```bash
+pi -e git:github.com/Whamp/pi-cliff
+```
+
+In that session, run `/cliff help` to see the defaults. Exit Pi to stop loading Cliff automatically; the package may remain in Pi's download cache.
+
 ## Configure
 
 Optional. Cliff's defaults apply when neither config file is present. Create `~/.pi/agent/cliff.json`:
