@@ -2,13 +2,13 @@
 # End-to-end check: run a real pi session against a real model with Cliff loaded,
 # force compaction, then resume the same session with a retrieval follow-up.
 #
-#   scripts/verify-live.sh                      # uses the local server60 model
 #   PI_MODEL_ARGS="--provider x --model y" scripts/verify-live.sh
 #
 # Nothing here writes under ~/.pi. Ambient extension discovery is disabled;
 # Cliff is loaded explicitly, and settings/session/auth files are isolated.
 set -euo pipefail
 umask 077
+: "${PI_MODEL_ARGS:?Set PI_MODEL_ARGS to --provider <name> --model <name> for a configured model}"
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp_root="${TMPDIR:-/tmp}"
@@ -16,8 +16,7 @@ work="$(mktemp -d "$tmp_root/pi-cliff-verify.XXXXXX")"
 artifact_dir="${CLIFF_LIVE_ARTIFACT_DIR:-$tmp_root/pi-cliff-verify-evidence-$(basename "$work")}"
 source_agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 agent_dir="$work/agent"
-model_args="${PI_MODEL_ARGS:---provider server60-qwen38 --model qwen3.8-flash-next-intel-autoround-w4a16}"
-read -r -a model_args_array <<< "$model_args"
+read -r -a model_args_array <<< "$PI_MODEL_ARGS"
 opening_marker="TEAL-7"
 followup_user_marker="FOLLOWUP_QUESTION:"
 followup_answer_marker="REMEMBERED_COLOUR=TEAL-7"
@@ -75,7 +74,7 @@ for file in models.json auth.json; do
 done
 export PI_CODING_AGENT_DIR="$agent_dir"
 
-# The reserve exceeds either selected model's context window, making Pi's
+# The reserve exceeds the selected model's context window, making Pi's
 # threshold reachable immediately; a small kept tail exercises the exact cut.
 cat >"$work/.pi/settings.json" <<'JSON'
 {

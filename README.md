@@ -1,6 +1,6 @@
 # pi-cliff
 
-Mechanical context compaction for [pi](https://github.com/badlogic/pi-mono), ported from [CliffCompaction](NOTICE.md).
+Mechanical context compaction for [pi](https://github.com/badlogic/pi-mono), ported from [CliffCompaction](https://github.com/nguyenvuthientrang/cliffcompaction). Based on the paper [CliffCompaction: Cost-Efficient Compaction for Long-Horizon Coding Agents](https://arxiv.org/abs/2609.26779).
 
 In `active` mode, when pi compacts a conversation, Cliff replaces the model-written summary with one built from the messages themselves. No model call. No new API cost. The summary lists what the assistant said, what it thought, which tools it called with which arguments, and which tool results were short enough to keep. Long tool outputs, images, and the previous summary are dropped, which is the whole point. `shadow` and `off` leave pi's model summariser in control.
 
@@ -99,18 +99,31 @@ After an active Cliff compaction you get a short committed-status line. `/cliff`
 ```bash
 pnpm check
 python3 scripts/gen-fixtures.py
-scripts/verify-live.sh  # optional live-model verification; not part of the offline check
+PI_MODEL_ARGS="--provider <name> --model <name>" scripts/verify-live.sh  # optional live-model check
 ```
 
 `pnpm check` runs TypeScript, type-aware Oxlint, formatting, the upstream renderer fixtures, and the real-Pi SDK integration tests. The SDK tests exercise manual `session.compact()` with model/network tripwires; automatic threshold and overflow behavior are covered at the direct hook boundary only. No live model is called by the offline suite.
 
 `gen-fixtures.py` calls upstream's own `compact()` and stores the resulting strings as the renderer oracle. Select a clone with `--upstream-src` or `CLIFF_UPSTREAM_SRC`; with neither, it uses `~/.cache/pi-cliff/cliffcompaction/src`. The checked-in provenance records the source selector and upstream revision, not a machine-specific absolute path.
 
-`verify-live.sh` is separate from offline validation. It disables ambient extension discovery, explicitly loads Cliff, and uses throwaway project settings, session, and agent directories; it does not install or edit anything under `~/.pi`. Needed model/auth files are copied only into the private temporary agent directory and removed on exit. The script preserves `run.log` and session JSONL under `/tmp/pi-cliff-verify-evidence-*` (or `CLIFF_LIVE_ARTIFACT_DIR`). It still runs the selected live model and is not part of `pnpm check`.
+`verify-live.sh` requires a configured model through `PI_MODEL_ARGS` and is separate from offline validation. It disables ambient extension discovery, explicitly loads Cliff, and uses throwaway project settings, session, and agent directories; it does not install or edit anything under `~/.pi`. Needed model/auth files are copied only into the private temporary agent directory and removed on exit. The script preserves `run.log` and session JSONL under `/tmp/pi-cliff-verify-evidence-*` (or `CLIFF_LIVE_ARTIFACT_DIR`). It still runs the selected live model and is not part of `pnpm check`.
 
 ## Out of scope
 
 Branch and tree summarisation is pi's own feature and may still use a model. Registering `session_before_tree` is deliberately not done. If you install another extension that replaces compaction, the two will fight over the same hook.
+
+## Citation
+
+The [original project](https://github.com/nguyenvuthientrang/cliffcompaction) gives this citation for the [paper](https://arxiv.org/abs/2609.26779):
+
+```bibtex
+@article{nguyen2026cliffcompaction,
+  title   = {CliffCompaction: Cost-Efficient Compaction for Long-Horizon Coding Agents},
+  author  = {Nguyen, Trang and Cho, Eulrang and Chen, Bingqing and Dettmers, Tim},
+  journal = {arXiv preprint arXiv:2609.26779},
+  year    = {2026}
+}
+```
 
 ## License
 
