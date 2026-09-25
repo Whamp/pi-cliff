@@ -9,7 +9,7 @@ It is a port of the compaction mechanism from an HTTP proxy into a pi extension.
 ## Install
 
 ```bash
-pi install /path/to/pi-cliff
+pi install git:github.com/Whamp/pi-cliff
 ```
 
 Restart pi. Cliff now handles every compaction request with a mechanical summary in `active` mode.
