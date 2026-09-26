@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 /**
  * Who owns the compaction summary.
  *
- * `active` writes Cliff's summary and skips pi's model call. `shadow` computes and reports what Cliff
+ * `active` uses native Codex compaction or a mechanical summary for other providers. `shadow` reports what Cliff
  * would have written, then leaves the compaction to pi, which is what makes the two comparable on the
  * same trigger and the same cut. `off` hands ownership back to pi and produces no Cliff output at all.
  */
@@ -275,7 +275,7 @@ export function formatCliffConfigHelp(): string {
   }
   lines.push(
     "Modes:",
-    "  active: Cliff writes a mechanical summary; Pi does not call its model summarizer.",
+    "  active: Provider-native Codex compaction; mechanical summaries for other providers.",
     "  shadow: Cliff computes a comparison summary, then Pi calls its model summarizer.",
     "  off: Cliff is disabled; Pi compacts with its model summarizer.",
     'When a valid config file selects "off", errors in the other file do not block Pi; /cliff still reports them.',
@@ -284,7 +284,8 @@ export function formatCliffConfigHelp(): string {
     "Speaker labels, tool signature wrappers, and appended ellipses are outside text payload caps; oversized tool results are dropped whole.",
     "These per-content limits are not total-context budgets. Overflow keeps the existing internal 300-code-point assistant-text cap (75 estimated tokens), not a provider-fit promise.",
     "Precedence: built-in defaults, then the global file, then the project file.",
-    "Pi owns the compaction trigger, cut, kept tail, and persistence; Cliff only renders the summary.",
+    "Pi owns the compaction trigger, cut, kept tail, and persistence. Cliff supplies the summary or native Codex checkpoint.",
+    "Codex checkpoints require the matching model and active mode. Rendering limits apply only to mechanical summaries.",
     "Default cliff.json:",
     "```json",
     JSON.stringify(DEFAULT_CLIFF_CONFIG, null, 2),
