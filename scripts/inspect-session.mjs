@@ -109,12 +109,29 @@ check(
   validHeadRecord,
   JSON.stringify(details ?? null).slice(0, 200),
 );
-check("summary starts with upstream's header", summary.startsWith(SUMMARY_HEADER));
-check(
-  "summary carries mechanical markers, not prose",
-  /^\s*(user|assistant|thinking|result|system):/m.test(summary) || /\n\[.+?\] /m.test(summary),
-);
-check("summary does not contain a long tool result verbatim", !/.{600,}/.test(summary));
+const nativeCheckpoint = compaction.details?.cliffCodexCheckpoint;
+if (nativeCheckpoint !== undefined) {
+  check(
+    "native Codex checkpoint is persisted",
+    nativeCheckpoint.version === 1 &&
+      nativeCheckpoint.provider === "openai-codex" &&
+      nativeCheckpoint.item?.type === "compaction" &&
+      typeof nativeCheckpoint.item.encrypted_content === "string" &&
+      nativeCheckpoint.item.encrypted_content.length > 0,
+  );
+  check(
+    "encrypted checkpoint is not embedded in summary text",
+    !summary.includes(nativeCheckpoint.item.encrypted_content),
+  );
+  check("native compaction usage is recorded", compaction.usage?.totalTokens > 0);
+} else {
+  check("summary starts with upstream's header", summary.startsWith(SUMMARY_HEADER));
+  check(
+    "summary carries mechanical markers, not prose",
+    /^\s*(user|assistant|thinking|result|system):/m.test(summary) || /\n\[.+?\] /m.test(summary),
+  );
+  check("summary does not contain a long tool result verbatim", !/.{600,}/.test(summary));
+}
 if (openingMarker !== undefined) {
   check("the opening instruction survives inside the summary", summary.includes(openingMarker));
   check(
