@@ -1,7 +1,7 @@
 {
   "name": "pi-cliff",
   "version": "0.1.0",
-  "description": "Pi extension that replaces compaction summaries with CliffCompaction's mechanical, no-model summary",
+  "description": "Pi compaction with native Codex checkpoints and mechanical summaries for other providers",
   "keywords": [
     "pi-extension",
     "pi-package",
@@ -27,7 +27,7 @@
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": ">=0.87.1"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.87.1",

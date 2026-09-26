@@ -1,10 +1,3 @@
-/**
- * Pi's native compaction hook, durable opening head, and `/cliff` status command.
- *
- * Pi supplies the compaction cut and token count. Cliff renders only the messages Pi selected and
- * stores only its carried opening head in the compaction details; reports and receipts are optional.
- */
-
 import { join } from "node:path";
 import {
   CONFIG_DIR_NAME,
@@ -38,6 +31,7 @@ import {
   type CliffMode,
 } from "./config.js";
 import { toSummaryUnits, type PiAgentMessage } from "./pi-units.js";
+import { CODEX_CHECKPOINT_KEY, createCodexCompaction } from "./codex-compaction.js";
 
 /** Namespace inside a compaction entry's `details` where Cliff stores its carried opening head. */
 export const CLIFF_DETAILS_KEY = "cliff";
@@ -101,7 +95,17 @@ export function createCliffExtension(
   pi: CliffExtensionAPI,
   dependencies: CliffExtensionDependencies,
 ): void {
-  pi.on("session_before_compact", (event, ctx) => runCompactionHook(event, ctx, dependencies, pi));
+  const compactCodex = createCodexCompaction(pi);
+  pi.on("session_before_compact", (event, ctx) => {
+    const failure = (error: unknown) =>
+      reportFailure(ctx, pi, "render", describeError(error), "active", event.reason);
+    try {
+      const result = compactCodex(event, ctx, runCompactionHook(event, ctx, dependencies, pi));
+      return result instanceof Promise ? result.catch(failure) : result;
+    } catch (error) {
+      return failure(error);
+    }
+  });
   pi.on("session_compact", (event, ctx) => {
     reportCommittedCompaction(event, ctx);
   });
@@ -178,7 +182,7 @@ function runCompactionHook(
     if (event.customInstructions !== undefined && event.customInstructions.trim() !== "") {
       reportCliffDiagnostic(
         host,
-        "Cliff ignored the /compact instructions: a mechanical summary cannot follow them. The compaction went ahead with the normal rules.",
+        "Cliff ignored the /compact instructions. The compaction went ahead with the normal rules.",
         "warning",
       );
     }
@@ -401,7 +405,7 @@ function reportFailure(
   reportCliffDiagnostic(
     host,
     mode === "active"
-      ? `Cliff cancelled this compaction (${stage} stage): ${message}. Set mode "off" to use Pi's summariser.`
+      ? `Cliff cancelled this compaction (${stage} stage): ${message}.`
       : `Cliff could not render a comparison summary (${stage} stage): ${message}`,
     mode === "active" ? "error" : "warning",
   );
@@ -417,9 +421,10 @@ function reportCommittedCompaction(event: SessionCompactEvent, ctx: ExtensionCon
   if (read.state !== "record") {
     return;
   }
+  const native = Object.hasOwn(asRecord(event.compactionEntry.details) ?? {}, CODEX_CHECKPOINT_KEY);
   reportCliffDiagnostic(
     ctx,
-    `Cliff: mechanical ${event.reason} compaction committed · ${String(read.record.head.length)} carried head units`,
+    `Cliff: ${native ? "native Codex" : "mechanical"} ${event.reason} compaction committed · ${String(read.record.head.length)} carried head units`,
     "info",
   );
 }

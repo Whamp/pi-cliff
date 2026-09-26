@@ -1,8 +1,10 @@
 # pi-cliff
 
-Mechanical context compaction for [pi](https://github.com/badlogic/pi-mono), ported from [CliffCompaction](https://github.com/nguyenvuthientrang/cliffcompaction). Based on the paper [CliffCompaction: Cost-Efficient Compaction for Long-Horizon Coding Agents](https://arxiv.org/abs/2609.26779).
+Context compaction for [pi](https://github.com/badlogic/pi-mono). Codex uses provider-native checkpoints. Other providers use the mechanical renderer ported from [CliffCompaction](https://github.com/nguyenvuthientrang/cliffcompaction), based on the paper [CliffCompaction: Cost-Efficient Compaction for Long-Horizon Coding Agents](https://arxiv.org/abs/2609.26779).
 
-In `active` mode, when pi compacts a conversation, Cliff replaces the model-written summary with one built from the messages themselves. No model call. No new API cost. The summary lists what the assistant said, what it thought, which tools it called with which arguments, and which tool results were short enough to keep. Long tool outputs, images, and the previous summary are dropped, which is the whole point. `shadow` and `off` leave pi's model summariser in control.
+In `active` mode on the `openai-codex` subscription route, Cliff asks Codex to compact the selected history into an opaque checkpoint. It preserves provider state instead of replacing it with readable reasoning summaries. This makes a provider request through the existing subscription and records its usage.
+
+For other providers, active compaction remains mechanical and makes no model call. The summary lists assistant text, readable thinking, tool arguments, and short tool results. It drops long tool outputs, images, and the previous summary. These mechanical summaries do not preserve opaque reasoning state.
 
 It is a port of the compaction mechanism from an HTTP proxy into a pi extension. Bash executions and branch summaries use Pi's own `convertToLlm` projection; `docs/design.md` records what carried over, what pi cannot express, and what was deliberately not ported.
 
@@ -12,7 +14,7 @@ It is a port of the compaction mechanism from an HTTP proxy into a pi extension.
 pi install git:github.com/Whamp/pi-cliff
 ```
 
-Restart pi. Cliff now handles every compaction request with a mechanical summary in `active` mode.
+Restart pi. Cliff handles compaction in `active` mode. Pi 0.87.1 or newer is required.
 
 To try Cliff for one Pi invocation without adding it to your settings, run:
 
@@ -21,6 +23,14 @@ pi -e git:github.com/Whamp/pi-cliff
 ```
 
 In that session, run `/cliff help` to see the defaults. Exit Pi to stop loading Cliff automatically; the package may remain in Pi's download cache.
+
+## Codex reasoning preservation
+
+Pi still chooses the compaction boundary and keeps the recent suffix. Cliff sends the selected prefix, including any preceding native checkpoint, to Codex's native compaction protocol. It stores the returned item unchanged under `details.cliffCodexCheckpoint` together with the model identity and a bounded retained user window. The next request replaces only the summary message with that window and checkpoint. The recent suffix stays in its original order.
+
+The checkpoint survives session reopen. Repeated compactions replace the active checkpoint rather than accumulating old checkpoints. Retained user items are bounded to 64,000 serialized UTF-8 bytes. Ciphertext is not put into summary text or assigned a fabricated token count. Pi reports unknown context usage immediately after compaction and uses the subsequent provider response for usage accounting.
+
+A failed native request cancels compaction without replacing history. A corrupt checkpoint or model mismatch aborts continuation rather than silently dropping native state. Keep the same Codex model and active mode for a checkpoint-bearing session. Cross-provider checkpoint conversion is not supported. Older text-only compactions cannot retroactively recover their discarded active provider state.
 
 ## Configure
 
@@ -40,15 +50,17 @@ Optional. Cliff's defaults apply when neither config file is present. Create `~/
 
 Add `<project>/.pi/cliff.json` to override values for one project. Project settings override global settings, which override the built-in defaults.
 
-| Key                       | Default       | Meaning                                                                   |
-| ------------------------- | ------------- | ------------------------------------------------------------------------- |
-| `mode`                    | `active`      | `active`, `shadow`, or `off`                                               |
-| `includeReasoning`        | `true`        | Include assistant reasoning text                                          |
-| `assistantTextMaxTokens`  | `"unlimited"` | Approximate-token limit for visible assistant text per message             |
-| `reasoningTextMaxTokens`  | `"unlimited"` | Approximate-token limit for reasoning text per assistant message            |
-| `toolCallMaxTokens`       | `37.5`        | Approximate-token limit for serialized tool-call arguments                 |
-| `toolResultMaxTokens`     | `125`         | Drop tool results whole when they exceed this approximate-token limit      |
-| `userTextMaxTokens`       | `5000`        | Approximate-token limit for user and system text per block, including head |
+| Key                      | Default       | Meaning                                                                    |
+| ------------------------ | ------------- | -------------------------------------------------------------------------- |
+| `mode`                   | `active`      | `active`, `shadow`, or `off`                                               |
+| `includeReasoning`       | `true`        | Include assistant reasoning text                                           |
+| `assistantTextMaxTokens` | `"unlimited"` | Approximate-token limit for visible assistant text per message             |
+| `reasoningTextMaxTokens` | `"unlimited"` | Approximate-token limit for reasoning text per assistant message           |
+| `toolCallMaxTokens`      | `37.5`        | Approximate-token limit for serialized tool-call arguments                 |
+| `toolResultMaxTokens`    | `125`         | Drop tool results whole when they exceed this approximate-token limit      |
+| `userTextMaxTokens`      | `5000`        | Approximate-token limit for user and system text per block, including head |
+
+The rendering settings below apply to mechanical summaries, not native Codex checkpoints.
 
 The five `*MaxTokens` settings are estimates, not actual tokenizer counts: estimated tokens = Unicode code points ÷ 4. After standard JavaScript JSON number parsing, they accept finite nonnegative numbers in quarter-token steps only, and the converted code-point cap (`tokens * 4`) must be a safe integer. Cliff does not round parsed limits. JSON parsing itself uses floating-point numbers, so extreme literals can lose precision or underflow to zero. A limit of `0` keeps no content in its category; `"unlimited"` disables it. Positive text limits append `...` after the capped payload. Speaker labels, tool signature wrappers, and appended ellipses are outside text payload caps. Tool-call limits apply to serialized arguments only; tool results are never truncated and oversized results are dropped whole. These are per-content limits, not total-context budgets.
 
@@ -73,15 +85,15 @@ There is no `thresholdTokens` and no `keepRecent` here on purpose. Upstream need
 
 `active` is the default. Cliff writes the summary and pi persists it.
 
-`shadow` computes the summary for comparison, then delegates to pi. Pi's model summariser still runs, so the no-model guarantee applies only to `active` mode.
+`shadow` computes a mechanical comparison summary, then delegates to Pi's model summariser. Neither shadow mode nor off mode provides native reasoning preservation.
 
-`off` returns control to pi entirely.
+`off` returns control to Pi for sessions without native checkpoints. A checkpoint-bearing session refuses text-only compaction.
 
 ## Failure
 
 If Cliff cannot read active-mode config, project Pi's selected messages, restore its own opening head, render a summary, or honor an abort, it cancels that compaction and reports why. History is unchanged. It never substitutes a degraded summary or falls through to Pi's model summariser. Optional notifications and outcome receipts are isolated: their failure cannot hand control to the model summariser.
 
-In `shadow` and `off`, Cliff delegates to pi. If something in Cliff is breaking and you need compaction back immediately, set `mode` to `"off"`.
+For sessions without native checkpoints, `shadow` and `off` delegate to Pi. For native Codex sessions, restore the matching model and active mode instead of bypassing the checkpoint.
 
 ## Using it
 
@@ -93,7 +105,7 @@ In `shadow` and `off`, Cliff delegates to pi. If something in Cliff is breaking 
 
 `/compact focus on the tests` asks a mechanical summariser to do something it cannot. Cliff compacts with the normal rules and reports that the instructions were ignored.
 
-After an active Cliff compaction you get a short committed-status line. `/cliff` shows every effective value and its winning built-in, global-file, or project-file origin, plus file, head, and receipt status. `/cliff help` works even when a config file is malformed. The compaction entry stores only `{version, head}` under `details.cliff`; optional receipts and statistics never gate head restoration.
+After an active Cliff compaction you get a short committed-status line. `/cliff` shows every effective value and its winning built-in, global-file, or project-file origin, plus file, head, and receipt status. `/cliff help` works even when a config file is malformed. The compaction entry stores `{version, head}` under `details.cliff`. Codex also stores its native state under `details.cliffCodexCheckpoint`. Optional reporting never gates head restoration.
 
 ## What you lose against the proxy
 
@@ -110,7 +122,7 @@ python3 scripts/gen-fixtures.py
 PI_MODEL_ARGS="--provider <name> --model <name>" scripts/verify-live.sh  # optional live-model check
 ```
 
-`pnpm check` runs TypeScript, type-aware Oxlint, formatting, the upstream renderer fixtures, and the real-Pi SDK integration tests. The SDK tests exercise manual `session.compact()` with model/network tripwires; automatic threshold and overflow behavior are covered at the direct hook boundary only. No live model is called by the offline suite.
+`pnpm check` runs TypeScript, type-aware Oxlint, formatting, the upstream renderer fixtures, and the real-Pi SDK integration tests. The SDK tests exercise manual `session.compact()` with network tripwires and synthetic Codex responses. They cover native replacement, repeated compaction, disk reopen, replay, recorded usage, and cancellation. Automatic threshold compaction is also exercised by the opt-in live harness. No live model is called by the offline suite.
 
 `gen-fixtures.py` calls upstream's own `compact()` and stores the resulting strings as the renderer oracle. Select a clone with `--upstream-src` or `CLIFF_UPSTREAM_SRC`; with neither, it uses `~/.cache/pi-cliff/cliffcompaction/src`. The checked-in provenance records the source selector and upstream revision, not a machine-specific absolute path.
 
