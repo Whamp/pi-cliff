@@ -32,6 +32,14 @@ interface NetworkAttempts {
 type PiSdk = typeof import("@earendil-works/pi-coding-agent");
 type PiSessionManager = ReturnType<PiSdk["SessionManager"]["create"]>;
 type PiAgentSession = Awaited<ReturnType<PiSdk["createAgentSession"]>>["session"];
+type PiAgentMessage = Parameters<PiSdk["convertToLlm"]>[0][number];
+type PiThinkingBlock = Extract<
+  Extract<PiAgentMessage, { role: "assistant" }>["content"][number],
+  { type: "thinking" }
+>;
+type SignedThinkingBlock = Omit<PiThinkingBlock, "thinkingSignature" | "redacted"> & {
+  thinkingSignature: string;
+};
 
 interface PiHarness {
   root: string;
@@ -52,6 +60,11 @@ interface TestSession {
   notificationAttempts: () => number;
 }
 
+interface SignedReasoningFixture {
+  visibleThinking: string;
+  thinkingSignature: string;
+}
+
 function usage() {
   return {
     input: 40,
@@ -61,6 +74,48 @@ function usage() {
     totalTokens: 52,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
+}
+
+function appendSignedReasoning(
+  sessionManager: PiSessionManager,
+  fixture: SignedReasoningFixture,
+): void {
+  const block = {
+    type: "thinking",
+    thinking: fixture.visibleThinking,
+    thinkingSignature: fixture.thinkingSignature,
+  } satisfies SignedThinkingBlock;
+  const message = {
+    role: "assistant",
+    content: [block],
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    model: "gpt-6-luna",
+    usage: usage(),
+    stopReason: "stop",
+    timestamp: Date.now(),
+  } satisfies PiAgentMessage;
+  sessionManager.appendMessage(message);
+}
+
+function thinkingSignatures(messages: readonly PiAgentMessage[]): string[] {
+  return messages.flatMap((message) => {
+    if (message.role !== "assistant") {
+      return [];
+    }
+    return message.content.flatMap((block) => {
+      if (block.type !== "thinking" || block.thinkingSignature === undefined) {
+        return [];
+      }
+      return [block.thinkingSignature];
+    });
+  });
+}
+
+function persistedThinkingSignatures(sessionManager: PiSessionManager): string[] {
+  return sessionManager
+    .getEntries()
+    .flatMap((entry) => (entry.type === "message" ? thinkingSignatures([entry.message]) : []));
 }
 
 async function createHarness(): Promise<PiHarness> {
@@ -165,7 +220,7 @@ function cliffDetails(entry: SessionEntry): Record<string, unknown> {
   return cliff;
 }
 
-function appendHistory(sessionManager: PiSessionManager) {
+function appendHistory(sessionManager: PiSessionManager, prefixReasoning?: SignedReasoningFixture) {
   sessionManager.appendModelChange(PROVIDER, MODEL_ID);
   sessionManager.appendThinkingLevelChange("off");
   sessionManager.appendMessage({
@@ -173,6 +228,9 @@ function appendHistory(sessionManager: PiSessionManager) {
     content: [{ type: "text", text: OPENING_TASK }],
     timestamp: Date.now(),
   });
+  if (prefixReasoning !== undefined) {
+    appendSignedReasoning(sessionManager, prefixReasoning);
+  }
   sessionManager.appendMessage({
     role: "assistant",
     content: [
@@ -287,6 +345,7 @@ async function makeSession(
     priorHead?: unknown;
     priorStats?: unknown;
     priorDetails?: unknown;
+    prefixReasoning?: SignedReasoningFixture;
     throwingNotify?: boolean;
   } = {},
 ): Promise<TestSession> {
@@ -304,7 +363,7 @@ async function makeSession(
   }
 
   const sessionManager = harness.sdk.SessionManager.create(cwd, join(harness.root, "sessions"));
-  const { firstFollowupId } = appendHistory(sessionManager);
+  const { firstFollowupId } = appendHistory(sessionManager, options.prefixReasoning);
   if (options.priorHead !== undefined || options.priorDetails !== undefined) {
     const priorDetails = options.priorDetails ?? {
       cliff: {
@@ -512,6 +571,94 @@ describe("real Pi SDK compaction integration", () => {
         expect(harness.network.sockets).toEqual([]);
       } finally {
         stderr.mockRestore();
+        host.session.dispose();
+      }
+    });
+  });
+
+  it("reloads signed reasoning from a disk-backed Pi session", async () => {
+    await withHarness(async (harness) => {
+      const host = await makeSession(harness);
+      const sessionFile = host.sessionManager.getSessionFile();
+      if (sessionFile === undefined) {
+        throw new Error("Pi host test expected a persisted session file");
+      }
+
+      try {
+        const before = measure(harness);
+        appendSignedReasoning(host.sessionManager, {
+          visibleThinking: "synthetic signed reasoning",
+          thinkingSignature: "SYNTHETIC-PI-SIGNATURE-REOPEN",
+        });
+        host.session.dispose();
+
+        const reopened = harness.sdk.SessionManager.open(sessionFile);
+        expect(persistedThinkingSignatures(reopened)).toEqual(["SYNTHETIC-PI-SIGNATURE-REOPEN"]);
+        expect(measure(harness)).toEqual(before);
+        expect(harness.network.fetch).toEqual([]);
+        expect(harness.network.sockets).toEqual([]);
+      } finally {
+        host.session.dispose();
+      }
+    });
+  });
+
+  it("separates raw signature history from the active suffix over two compactions", async () => {
+    await withHarness(async (harness) => {
+      const host = await makeSession(harness, {
+        prefixReasoning: {
+          visibleThinking: "old prefix reasoning",
+          thinkingSignature: "SYNTHETIC-PI-SIGNATURE-PREFIX",
+        },
+      });
+      const sessionFile = host.sessionManager.getSessionFile();
+      if (sessionFile === undefined) {
+        throw new Error("Pi host test expected a persisted session file");
+      }
+
+      try {
+        const before = measure(harness);
+        appendSignedReasoning(host.sessionManager, {
+          visibleThinking: "first retained reasoning",
+          thinkingSignature: "SYNTHETIC-PI-SIGNATURE-CYCLE-ONE",
+        });
+        const first = await host.session.compact();
+
+        expect(first.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-PREFIX");
+        expect(first.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-CYCLE-ONE");
+        expect(persistedThinkingSignatures(host.sessionManager)).toEqual([
+          "SYNTHETIC-PI-SIGNATURE-PREFIX",
+          "SYNTHETIC-PI-SIGNATURE-CYCLE-ONE",
+        ]);
+        expect(thinkingSignatures(host.sessionManager.buildSessionProjection().messages)).toEqual([
+          "SYNTHETIC-PI-SIGNATURE-CYCLE-ONE",
+        ]);
+
+        appendMoreTurns(host.sessionManager, 5);
+        appendSignedReasoning(host.sessionManager, {
+          visibleThinking: "second retained reasoning",
+          thinkingSignature: "SYNTHETIC-PI-SIGNATURE-CYCLE-TWO",
+        });
+        const second = await host.session.compact();
+
+        expect(second.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-PREFIX");
+        expect(second.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-CYCLE-ONE");
+        expect(second.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-CYCLE-TWO");
+        host.session.dispose();
+
+        const reopened = harness.sdk.SessionManager.open(sessionFile);
+        expect(persistedThinkingSignatures(reopened)).toEqual([
+          "SYNTHETIC-PI-SIGNATURE-PREFIX",
+          "SYNTHETIC-PI-SIGNATURE-CYCLE-ONE",
+          "SYNTHETIC-PI-SIGNATURE-CYCLE-TWO",
+        ]);
+        expect(thinkingSignatures(reopened.buildSessionProjection().messages)).toEqual([
+          "SYNTHETIC-PI-SIGNATURE-CYCLE-TWO",
+        ]);
+        expect(measure(harness)).toEqual(before);
+        expect(harness.network.fetch).toEqual([]);
+        expect(harness.network.sockets).toEqual([]);
+      } finally {
         host.session.dispose();
       }
     });

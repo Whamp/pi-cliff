@@ -251,6 +251,7 @@ describe("assistant messages", () => {
       { kind: "assistant", thoughts: [], thinking: ["visible Codex reasoning"], calls: [] },
     ]);
     expect(JSON.stringify(units)).not.toContain(marker);
+    expect(renderUnits(units)).not.toContain(marker);
   });
 
   it("maps signed Codex thinking with empty visible text without its opaque signature", () => {
@@ -282,6 +283,7 @@ describe("assistant messages", () => {
 
     expect(units).toEqual([{ kind: "assistant", thoughts: [], thinking: [""], calls: [] }]);
     expect(JSON.stringify(units)).not.toContain(marker);
+    expect(renderUnits(units)).not.toContain(marker);
   });
 
   it("counts redacted thinking as an omission and never leaks its signed payload", () => {
@@ -311,6 +313,7 @@ describe("assistant messages", () => {
       { kind: "omitted", reason: "redactedThinking" },
     ]);
     expect(JSON.stringify(units)).not.toContain(marker);
+    expect(renderUnits(units)).not.toContain(marker);
   });
 
   it("joins a namespaced tool call into the one name upstream has", () => {
