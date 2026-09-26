@@ -177,7 +177,7 @@ describe("parseCliffConfig accepts the documented policy", () => {
       "Precedence: built-in defaults, then the global file, then the project file.",
     );
     expect(help).toContain(
-      "active: Provider-native Codex compaction; mechanical summaries for other providers.",
+      "active: Cliff writes a mechanical summary; Pi does not call its model summarizer.",
     );
     expect(help).toContain(
       "shadow: Cliff computes a comparison summary, then Pi calls its model summarizer.",

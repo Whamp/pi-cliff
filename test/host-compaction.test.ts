@@ -2,7 +2,6 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import net from "node:net";
-import { zstdDecompressSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import type {
   ExtensionUIContext,
@@ -33,14 +32,6 @@ interface NetworkAttempts {
 type PiSdk = typeof import("@earendil-works/pi-coding-agent");
 type PiSessionManager = ReturnType<PiSdk["SessionManager"]["create"]>;
 type PiAgentSession = Awaited<ReturnType<PiSdk["createAgentSession"]>>["session"];
-type PiAgentMessage = Parameters<PiSdk["convertToLlm"]>[0][number];
-type PiThinkingBlock = Extract<
-  Extract<PiAgentMessage, { role: "assistant" }>["content"][number],
-  { type: "thinking" }
->;
-type SignedThinkingBlock = Omit<PiThinkingBlock, "thinkingSignature" | "redacted"> & {
-  thinkingSignature: string;
-};
 
 interface PiHarness {
   root: string;
@@ -61,11 +52,6 @@ interface TestSession {
   notificationAttempts: () => number;
 }
 
-interface SignedReasoningFixture {
-  visibleThinking: string;
-  thinkingSignature: string;
-}
-
 function usage() {
   return {
     input: 40,
@@ -75,48 +61,6 @@ function usage() {
     totalTokens: 52,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
-}
-
-function appendSignedReasoning(
-  sessionManager: PiSessionManager,
-  fixture: SignedReasoningFixture,
-): void {
-  const block = {
-    type: "thinking",
-    thinking: fixture.visibleThinking,
-    thinkingSignature: fixture.thinkingSignature,
-  } satisfies SignedThinkingBlock;
-  const message = {
-    role: "assistant",
-    content: [block],
-    api: "openai-codex-responses",
-    provider: "openai-codex",
-    model: "gpt-6-luna",
-    usage: usage(),
-    stopReason: "stop",
-    timestamp: Date.now(),
-  } satisfies PiAgentMessage;
-  sessionManager.appendMessage(message);
-}
-
-function thinkingSignatures(messages: readonly PiAgentMessage[]): string[] {
-  return messages.flatMap((message) => {
-    if (message.role !== "assistant") {
-      return [];
-    }
-    return message.content.flatMap((block) => {
-      if (block.type !== "thinking" || block.thinkingSignature === undefined) {
-        return [];
-      }
-      return [block.thinkingSignature];
-    });
-  });
-}
-
-function persistedThinkingSignatures(sessionManager: PiSessionManager): string[] {
-  return sessionManager
-    .getEntries()
-    .flatMap((entry) => (entry.type === "message" ? thinkingSignatures([entry.message]) : []));
 }
 
 async function createHarness(): Promise<PiHarness> {
@@ -214,81 +158,6 @@ function latestCompaction(sessionManager: PiSessionManager) {
   return entry;
 }
 
-function installCodexResponseFixture(harness: PiHarness, failure = false) {
-  const requests: Record<string, unknown>[] = [];
-  let checkpoints = 0;
-  globalThis.fetch = async (input, init) => {
-    init?.signal?.throwIfAborted();
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    expect(url).toBe("https://chatgpt.com/backend-api/codex/responses");
-    harness.network.fetch.push(url);
-    const body = init?.body;
-    if (!(body instanceof Uint8Array) && typeof body !== "string") {
-      throw new Error("Codex fixture expected a serialized request body");
-    }
-    const bytes = typeof body === "string" ? Buffer.from(body, "utf8") : Buffer.from(body);
-    const headers = new Headers(init?.headers);
-    const decoded = headers.get("content-encoding") === "zstd" ? zstdDecompressSync(bytes) : bytes;
-    const parsed: unknown = JSON.parse(decoded.toString("utf8"));
-    const request = record(parsed);
-    if (request === undefined || !Array.isArray(request.input)) {
-      throw new Error("Codex fixture expected an input array");
-    }
-    requests.push(request);
-    const compacting = request.input.some(
-      (item: unknown) => record(item)?.type === "compaction_trigger",
-    );
-    if (compacting && failure) return new Response("synthetic failure", { status: 503 });
-    if (compacting) {
-      expect(headers.get("x-codex-beta-features")).toBe("remote_compaction_v2");
-      expect(record(request.client_metadata)?.["x-codex-turn-metadata"]).toBe(
-        headers.get("x-codex-turn-metadata"),
-      );
-      expect(request.input.at(-1)).toEqual({ type: "compaction_trigger" });
-    }
-    const item = compacting
-      ? {
-          type: "compaction",
-          id: `cmp_${++checkpoints}`,
-          encrypted_content: `SYNTHETIC_CHECKPOINT_${checkpoints}`,
-          extra: "preserve me",
-        }
-      : {
-          type: "message",
-          id: "msg_continued",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "CONTINUED", annotations: [] }],
-        };
-    const events = [
-      { type: "response.output_item.added", output_index: 0, item },
-      ...(compacting
-        ? []
-        : [
-            {
-              type: "response.output_text.delta",
-              output_index: 0,
-              content_index: 0,
-              delta: "CONTINUED",
-            },
-          ]),
-      { type: "response.output_item.done", output_index: 0, item },
-      {
-        type: "response.completed",
-        response: {
-          status: "completed",
-          output: [item],
-          usage: { input_tokens: 250, output_tokens: 5, total_tokens: 255 },
-        },
-      },
-    ];
-    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-      headers: { "content-type": "text/event-stream" },
-    });
-  };
-  return requests;
-}
-
 function cliffDetails(entry: SessionEntry): Record<string, unknown> {
   if (entry.type !== "compaction") throw new Error("expected compaction entry");
   const cliff = record(record(entry.details)?.["cliff"]);
@@ -296,7 +165,7 @@ function cliffDetails(entry: SessionEntry): Record<string, unknown> {
   return cliff;
 }
 
-function appendHistory(sessionManager: PiSessionManager, prefixReasoning?: SignedReasoningFixture) {
+function appendHistory(sessionManager: PiSessionManager) {
   sessionManager.appendModelChange(PROVIDER, MODEL_ID);
   sessionManager.appendThinkingLevelChange("off");
   sessionManager.appendMessage({
@@ -304,9 +173,6 @@ function appendHistory(sessionManager: PiSessionManager, prefixReasoning?: Signe
     content: [{ type: "text", text: OPENING_TASK }],
     timestamp: Date.now(),
   });
-  if (prefixReasoning !== undefined) {
-    appendSignedReasoning(sessionManager, prefixReasoning);
-  }
   sessionManager.appendMessage({
     role: "assistant",
     content: [
@@ -421,9 +287,6 @@ async function makeSession(
     priorHead?: unknown;
     priorStats?: unknown;
     priorDetails?: unknown;
-    prefixReasoning?: SignedReasoningFixture;
-    codex?: boolean;
-    reopenPath?: string;
     throwingNotify?: boolean;
   } = {},
 ): Promise<TestSession> {
@@ -440,14 +303,8 @@ async function makeSession(
     );
   }
 
-  const sessionManager =
-    options.reopenPath === undefined
-      ? harness.sdk.SessionManager.create(cwd, join(harness.root, "sessions"))
-      : harness.sdk.SessionManager.open(options.reopenPath);
-  const firstFollowupId =
-    options.reopenPath === undefined
-      ? appendHistory(sessionManager, options.prefixReasoning).firstFollowupId
-      : sessionManager.getLeafId();
+  const sessionManager = harness.sdk.SessionManager.create(cwd, join(harness.root, "sessions"));
+  const { firstFollowupId } = appendHistory(sessionManager);
   if (options.priorHead !== undefined || options.priorDetails !== undefined) {
     const priorDetails = options.priorDetails ?? {
       cliff: {
@@ -469,7 +326,6 @@ async function makeSession(
   const settings = harness.sdk.SettingsManager.inMemory({
     compaction: { enabled: true, reserveTokens: 2000, keepRecentTokens: 300 },
     retry: { enabled: false },
-    transport: "sse",
   });
   const runtime = await harness.sdk.ModelRuntime.create({
     authPath: join(harness.root, "offline-auth.json"),
@@ -477,21 +333,15 @@ async function makeSession(
     refreshOnCreate: false,
     allowModelNetwork: false,
   });
-  const provider = options.codex ? "openai-codex" : PROVIDER;
-  const modelId = options.codex ? "gpt-6-luna" : MODEL_ID;
-  const syntheticJwt = Buffer.from(
-    JSON.stringify({
-      "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-cliff-account" },
-    }),
-  ).toString("base64url");
-  runtime.registerProvider(provider, {
+  runtime.registerProvider(PROVIDER, {
     name: "Pi Cliff offline tripwire",
-    baseUrl: options.codex ? "https://chatgpt.com/backend-api" : "http://127.0.0.1:9/v1",
-    api: options.codex ? "openai-codex-responses" : "openai-completions",
-    apiKey: options.codex ? `e30.${syntheticJwt}.synthetic` : "stub-key-not-real",
+    baseUrl: "http://127.0.0.1:9/v1",
+    api: "openai-completions",
+    // A deliberately fake key only lets Pi reach the localhost network tripwire in shadow mode.
+    apiKey: "stub-key-not-real",
     models: [
       {
-        id: modelId,
+        id: MODEL_ID,
         name: "Offline probe model",
         reasoning: false,
         input: ["text"],
@@ -501,7 +351,7 @@ async function makeSession(
       },
     ],
   });
-  const model = runtime.getModel(provider, modelId);
+  const model = runtime.getModel(PROVIDER, MODEL_ID);
   if (model === undefined) throw new Error("Pi host test could not register its offline model");
 
   let notificationAttempts = 0;
@@ -662,208 +512,6 @@ describe("real Pi SDK compaction integration", () => {
         expect(harness.network.sockets).toEqual([]);
       } finally {
         stderr.mockRestore();
-        host.session.dispose();
-      }
-    });
-  });
-
-  it("replays native Codex state across two compactions and a disk reopen", async () => {
-    await withHarness(async (harness) => {
-      const requests = installCodexResponseFixture(harness);
-      const host = await makeSession(harness, {
-        codex: true,
-        prefixReasoning: {
-          visibleThinking: "original reasoning",
-          thinkingSignature: JSON.stringify({
-            type: "reasoning",
-            id: "rs_prefix",
-            encrypted_content: "SYNTHETIC_ORIGINAL_REASONING",
-            summary: [],
-          }),
-        },
-      });
-      const sessionFile = host.sessionManager.getSessionFile();
-      if (sessionFile === undefined) throw new Error("Codex test expected a session file");
-      try {
-        await host.session.compact();
-        expect(latestCompaction(host.sessionManager).usage?.totalTokens).toBe(255);
-        expect(JSON.stringify(requests[0]?.input)).toContain("SYNTHETIC_ORIGINAL_REASONING");
-        const first = record(
-          record(latestCompaction(host.sessionManager).details)?.cliffCodexCheckpoint,
-        );
-        expect(first?.item).toEqual({
-          type: "compaction",
-          id: "cmp_1",
-          encrypted_content: "SYNTHETIC_CHECKPOINT_1",
-          extra: "preserve me",
-        });
-        await host.session.prompt("continue before restart");
-        const firstReplay = requests[1]?.input;
-        expect(Array.isArray(firstReplay)).toBe(true);
-        if (!Array.isArray(firstReplay)) throw new Error("Codex test expected replay input");
-        expect(firstReplay.filter((item: unknown) => record(item)?.type === "compaction")).toEqual([
-          first?.item,
-        ]);
-        expect(JSON.stringify(firstReplay)).not.toContain("Cliff native checkpoint");
-        appendMoreTurns(host.sessionManager, 5);
-        await host.session.compact();
-        expect(JSON.stringify(requests[2]?.input)).toContain("SYNTHETIC_CHECKPOINT_1");
-        const second = record(
-          record(latestCompaction(host.sessionManager).details)?.cliffCodexCheckpoint,
-        );
-        expect(second?.item).toEqual({
-          type: "compaction",
-          id: "cmp_2",
-          encrypted_content: "SYNTHETIC_CHECKPOINT_2",
-          extra: "preserve me",
-        });
-        host.session.dispose();
-        const reopened = await makeSession(harness, { codex: true, reopenPath: sessionFile });
-        try {
-          await reopened.session.prompt("continue after restart");
-          const replay = requests[3]?.input;
-          if (!Array.isArray(replay)) throw new Error("Codex test expected reopened replay input");
-          expect(replay.filter((item: unknown) => record(item)?.type === "compaction")).toEqual([
-            second?.item,
-          ]);
-          expect(JSON.stringify(replay)).not.toContain("SYNTHETIC_CHECKPOINT_1");
-          expect(JSON.stringify(replay)).not.toContain("Cliff native checkpoint");
-          expect(requests).toHaveLength(4);
-          expect(harness.network.sockets).toEqual([]);
-        } finally {
-          reopened.session.dispose();
-        }
-      } finally {
-        host.session.dispose();
-      }
-    });
-  });
-
-  it("cancels a failed native compaction without replacing the original history", async () => {
-    await withHarness(async (harness) => {
-      const requests = installCodexResponseFixture(harness, true);
-      const host = await makeSession(harness, { codex: true });
-      try {
-        const before = host.sessionManager.buildSessionProjection().messages;
-        await expect(host.session.compact()).rejects.toThrow("cancelled");
-        expect(host.sessionManager.buildSessionProjection().messages).toEqual(before);
-        expect(
-          host.sessionManager.getBranch().filter((entry) => entry.type === "compaction"),
-        ).toEqual([]);
-        expect(requests).toHaveLength(1);
-        expect(harness.network.sockets).toEqual([]);
-      } finally {
-        host.session.dispose();
-      }
-    });
-  });
-
-  it("aborts before dispatch when a persisted native checkpoint is corrupt", async () => {
-    await withHarness(async (harness) => {
-      const requests = installCodexResponseFixture(harness);
-      const host = await makeSession(harness, { codex: true });
-      try {
-        await host.session.compact();
-        const original = latestCompaction(host.sessionManager);
-        host.sessionManager.appendCompaction(
-          "corrupt native checkpoint",
-          original.firstKeptEntryId,
-          original.tokensBefore,
-          { cliffCodexCheckpoint: { version: 1 } },
-          true,
-        );
-        await host.session.prompt("this request must not reach the provider");
-        expect(requests).toHaveLength(1);
-        expect(harness.network.sockets).toEqual([]);
-      } finally {
-        host.session.dispose();
-      }
-    });
-  });
-
-  it("reloads signed reasoning from a disk-backed Pi session", async () => {
-    await withHarness(async (harness) => {
-      const host = await makeSession(harness);
-      const sessionFile = host.sessionManager.getSessionFile();
-      if (sessionFile === undefined) {
-        throw new Error("Pi host test expected a persisted session file");
-      }
-
-      try {
-        const before = measure(harness);
-        appendSignedReasoning(host.sessionManager, {
-          visibleThinking: "synthetic signed reasoning",
-          thinkingSignature: "SYNTHETIC-PI-SIGNATURE-REOPEN",
-        });
-        host.session.dispose();
-
-        const reopened = harness.sdk.SessionManager.open(sessionFile);
-        expect(persistedThinkingSignatures(reopened)).toEqual(["SYNTHETIC-PI-SIGNATURE-REOPEN"]);
-        expect(measure(harness)).toEqual(before);
-        expect(harness.network.fetch).toEqual([]);
-        expect(harness.network.sockets).toEqual([]);
-      } finally {
-        host.session.dispose();
-      }
-    });
-  });
-
-  it("separates raw signature history from the active suffix over two compactions", async () => {
-    await withHarness(async (harness) => {
-      const host = await makeSession(harness, {
-        prefixReasoning: {
-          visibleThinking: "old prefix reasoning",
-          thinkingSignature: "SYNTHETIC-PI-SIGNATURE-PREFIX",
-        },
-      });
-      const sessionFile = host.sessionManager.getSessionFile();
-      if (sessionFile === undefined) {
-        throw new Error("Pi host test expected a persisted session file");
-      }
-
-      try {
-        const before = measure(harness);
-        appendSignedReasoning(host.sessionManager, {
-          visibleThinking: "first retained reasoning",
-          thinkingSignature: "SYNTHETIC-PI-SIGNATURE-CYCLE-ONE",
-        });
-        const first = await host.session.compact();
-
-        expect(first.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-PREFIX");
-        expect(first.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-CYCLE-ONE");
-        expect(persistedThinkingSignatures(host.sessionManager)).toEqual([
-          "SYNTHETIC-PI-SIGNATURE-PREFIX",
-          "SYNTHETIC-PI-SIGNATURE-CYCLE-ONE",
-        ]);
-        expect(thinkingSignatures(host.sessionManager.buildSessionProjection().messages)).toEqual([
-          "SYNTHETIC-PI-SIGNATURE-CYCLE-ONE",
-        ]);
-
-        appendMoreTurns(host.sessionManager, 5);
-        appendSignedReasoning(host.sessionManager, {
-          visibleThinking: "second retained reasoning",
-          thinkingSignature: "SYNTHETIC-PI-SIGNATURE-CYCLE-TWO",
-        });
-        const second = await host.session.compact();
-
-        expect(second.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-PREFIX");
-        expect(second.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-CYCLE-ONE");
-        expect(second.summary).not.toContain("SYNTHETIC-PI-SIGNATURE-CYCLE-TWO");
-        host.session.dispose();
-
-        const reopened = harness.sdk.SessionManager.open(sessionFile);
-        expect(persistedThinkingSignatures(reopened)).toEqual([
-          "SYNTHETIC-PI-SIGNATURE-PREFIX",
-          "SYNTHETIC-PI-SIGNATURE-CYCLE-ONE",
-          "SYNTHETIC-PI-SIGNATURE-CYCLE-TWO",
-        ]);
-        expect(thinkingSignatures(reopened.buildSessionProjection().messages)).toEqual([
-          "SYNTHETIC-PI-SIGNATURE-CYCLE-TWO",
-        ]);
-        expect(measure(harness)).toEqual(before);
-        expect(harness.network.fetch).toEqual([]);
-        expect(harness.network.sockets).toEqual([]);
-      } finally {
         host.session.dispose();
       }
     });

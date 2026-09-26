@@ -78,7 +78,6 @@ export PI_CODING_AGENT_DIR="$agent_dir"
 # threshold reachable immediately; a small kept tail exercises the exact cut.
 cat >"$work/.pi/settings.json" <<'JSON'
 {
-  "transport": "sse",
   "compaction": {
     "enabled": true,
     "reserveTokens": 1000000,
@@ -133,7 +132,7 @@ run_pi "${model_args_array[@]}" \
 
 node "$repo/scripts/inspect-session.mjs" \
   "$session" "$opening_marker" "$followup_user_marker" "$followup_answer_marker"
-if ! grep -Eq 'Cliff: (mechanical|native Codex) .* compaction committed' "$artifact_dir/run.log"; then
+if ! grep -q 'Cliff: mechanical .* compaction committed' "$artifact_dir/run.log"; then
   echo "session log lacks Cliff's committed-compaction receipt" >&2
   exit 1
 fi

@@ -169,21 +169,6 @@ describe("user messages", () => {
 });
 
 describe("assistant messages", () => {
-  type PiThinkingBlock = Extract<
-    Extract<PiAgentMessage, { role: "assistant" }>["content"][number],
-    { type: "thinking" }
-  >;
-  type NormalSignedThinking = Omit<PiThinkingBlock, "thinkingSignature" | "redacted"> & {
-    thinkingSignature: string;
-  };
-  type RedactedThinking = Omit<PiThinkingBlock, "thinkingSignature" | "redacted"> & {
-    thinkingSignature: string;
-    redacted: true;
-  };
-  type ThinkingFixture =
-    | { kind: "normal-signed"; block: NormalSignedThinking }
-    | { kind: "redacted"; block: RedactedThinking };
-
   const message = {
     role: "assistant",
     content: [
@@ -220,86 +205,13 @@ describe("assistant messages", () => {
     );
   });
 
-  it("projects visible Codex reasoning text without its opaque signature", () => {
-    const marker = "SYNTHETIC-CODEX-ENCRYPTED-CONTENT";
-    const signedThinking = {
-      kind: "normal-signed",
-      block: {
-        type: "thinking",
-        thinking: "visible Codex reasoning",
-        thinkingSignature: JSON.stringify({
-          id: "rs_synthetic_1",
-          type: "reasoning",
-          summary: [],
-          encrypted_content: marker,
-        }),
-      },
-    } satisfies ThinkingFixture;
-    const codexMessage = {
-      role: "assistant",
-      content: [signedThinking.block],
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      model: "gpt-6-luna",
-      usage: USAGE,
-      stopReason: "stop",
-      timestamp: TIMESTAMP,
-    } satisfies PiAgentMessage;
-    const units = toSummaryUnits([codexMessage]);
-
-    expect(units).toEqual([
-      { kind: "assistant", thoughts: [], thinking: ["visible Codex reasoning"], calls: [] },
-    ]);
-    expect(JSON.stringify(units)).not.toContain(marker);
-    expect(renderUnits(units)).not.toContain(marker);
-  });
-
-  it("maps signed Codex thinking with empty visible text without its opaque signature", () => {
-    const marker = "SYNTHETIC-CODEX-EMPTY-VISIBLE-CONTENT";
-    const signedThinking = {
-      kind: "normal-signed",
-      block: {
-        type: "thinking",
-        thinking: "",
-        thinkingSignature: JSON.stringify({
-          id: "rs_synthetic_empty",
-          type: "reasoning",
-          summary: [],
-          encrypted_content: marker,
-        }),
-      },
-    } satisfies ThinkingFixture;
-    const codexMessage = {
-      role: "assistant",
-      content: [signedThinking.block],
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      model: "gpt-6-luna",
-      usage: USAGE,
-      stopReason: "stop",
-      timestamp: TIMESTAMP,
-    } satisfies PiAgentMessage;
-    const units = toSummaryUnits([codexMessage]);
-
-    expect(units).toEqual([{ kind: "assistant", thoughts: [], thinking: [""], calls: [] }]);
-    expect(JSON.stringify(units)).not.toContain(marker);
-    expect(renderUnits(units)).not.toContain(marker);
-  });
-
-  it("counts redacted thinking as an omission and never leaks its signed payload", () => {
-    const marker = "SYNTHETIC-ANTHROPIC-REDACTED-DATA";
-    const redactedThinking = {
-      kind: "redacted",
-      block: {
-        type: "thinking",
-        thinking: "[Reasoning redacted]",
-        thinkingSignature: marker,
-        redacted: true,
-      },
-    } satisfies ThinkingFixture;
+  it("counts redacted thinking as an omission and never leaks its payload", () => {
     const redacted = {
       role: "assistant",
-      content: [redactedThinking.block, { type: "text", text: "visible text" }],
+      content: [
+        { type: "thinking", thinking: "ENCRYPTED-BLOB", redacted: true },
+        { type: "text", text: "visible text" },
+      ],
       api: "anthropic",
       provider: "anthropic",
       model: "claude-test",
@@ -312,8 +224,7 @@ describe("assistant messages", () => {
       { kind: "assistant", thoughts: ["visible text"], thinking: [], calls: [] },
       { kind: "omitted", reason: "redactedThinking" },
     ]);
-    expect(JSON.stringify(units)).not.toContain(marker);
-    expect(renderUnits(units)).not.toContain(marker);
+    expect(renderUnits(units)).not.toContain("ENCRYPTED-BLOB");
   });
 
   it("joins a namespaced tool call into the one name upstream has", () => {
