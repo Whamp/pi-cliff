@@ -113,6 +113,24 @@ describe("parseCliffConfig accepts the documented policy", () => {
     }
   });
 
+  it("accepts positive automatic limits and rejects zero, fractional, and unsafe values", () => {
+    expect(parseCliffConfig({ thresholdTokens: 512, keepRecentTurns: 2 })).toEqual({
+      ok: true,
+      settings: { thresholdTokens: 512, keepRecentTurns: 2 },
+    });
+    const invalid = parseCliffConfig({ thresholdTokens: 0, keepRecentTurns: 1.5 });
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) {
+      expect(invalid.errors.join("\n")).toContain(
+        '"thresholdTokens" must be a positive safe integer',
+      );
+      expect(invalid.errors.join("\n")).toContain(
+        '"keepRecentTurns" must be a positive safe integer',
+      );
+    }
+    expect(parseCliffConfig({ thresholdTokens: Number.MAX_SAFE_INTEGER + 1 }).ok).toBe(false);
+  });
+
   it("accepts includeReasoning either way", () => {
     expect(parseCliffConfig({ includeReasoning: false })).toEqual({
       ok: true,
@@ -124,9 +142,11 @@ describe("parseCliffConfig accepts the documented policy", () => {
     });
   });
 
-  it("reads all seven settings under their public names", () => {
+  it("reads all nine settings under their public names", () => {
     const document = {
       mode: "shadow",
+      thresholdTokens: 200_000,
+      keepRecentTurns: 3,
       includeReasoning: false,
       assistantTextMaxTokens: 11,
       reasoningTextMaxTokens: 12,
@@ -136,7 +156,7 @@ describe("parseCliffConfig accepts the documented policy", () => {
     };
     const parsed = parseCliffConfig(document);
     expect(parsed).toEqual({ ok: true, settings: document });
-    expect(parsed.ok && Object.keys(parsed.settings)).toHaveLength(7);
+    expect(parsed.ok && Object.keys(parsed.settings)).toHaveLength(9);
   });
 
   it("formats one copyable strict JSON default object from the option metadata", () => {
@@ -145,6 +165,8 @@ describe("parseCliffConfig accepts the documented policy", () => {
 
     expect(CLIFF_CONFIG_OPTIONS.map(({ key }) => key)).toEqual([
       "mode",
+      "thresholdTokens",
+      "keepRecentTurns",
       "includeReasoning",
       "assistantTextMaxTokens",
       "reasoningTextMaxTokens",
@@ -156,6 +178,8 @@ describe("parseCliffConfig accepts the documented policy", () => {
     expect(JSON.parse(defaultBlock ?? "")).toEqual(DEFAULT_CLIFF_CONFIG);
     expect(DEFAULT_CLIFF_CONFIG).toEqual({
       mode: "active",
+      thresholdTokens: 200_000,
+      keepRecentTurns: 3,
       includeReasoning: true,
       assistantTextMaxTokens: "unlimited",
       reasoningTextMaxTokens: "unlimited",
@@ -192,7 +216,9 @@ describe("parseCliffConfig accepts the documented policy", () => {
     expect(help).toContain("Unicode code points divided by 4, not tokenizer counts.");
     expect(help).toContain("exact quarter-token steps");
     expect(help).toContain("75 estimated tokens");
-    expect(help).toContain("Pi owns the compaction trigger, cut, kept tail, and persistence");
+    expect(help).toContain(
+      "Cliff chooses automatic cuts after completed steps; Pi still owns manual cuts",
+    );
   });
 });
 
@@ -335,6 +361,8 @@ describe("mergeCliffConfig", () => {
     expect(mergeCliffConfig([])).toEqual(DEFAULT_CLIFF_CONFIG);
     expect(DEFAULT_CLIFF_CONFIG).toEqual({
       mode: "active",
+      thresholdTokens: 200_000,
+      keepRecentTurns: 3,
       includeReasoning: DEFAULT_SUMMARY_POLICY.includeReasoning,
       assistantTextMaxTokens: tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.assistantTextMaxChars),
       reasoningTextMaxTokens: tokenLimitFromRenderer(DEFAULT_SUMMARY_POLICY.reasoningTextMaxChars),
@@ -360,6 +388,8 @@ describe("mergeCliffConfig", () => {
     ]);
     expect(resolved).toEqual({
       mode: "off",
+      thresholdTokens: 200_000,
+      keepRecentTurns: 3,
       includeReasoning: DEFAULT_SUMMARY_POLICY.includeReasoning,
       assistantTextMaxTokens: DEFAULT_SUMMARY_POLICY.assistantTextMaxChars,
       reasoningTextMaxTokens: DEFAULT_SUMMARY_POLICY.reasoningTextMaxChars,

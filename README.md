@@ -12,7 +12,7 @@ It is a port of the compaction mechanism from an HTTP proxy into a pi extension.
 pi install git:github.com/Whamp/pi-cliff
 ```
 
-Restart pi. Cliff now handles every compaction request with a mechanical summary in `active` mode.
+Restart pi. Cliff now chooses automatic cuts after completed assistant/tool steps in `active` mode. Manual `/compact` still uses Pi's eligibility and cut.
 
 To try Cliff for one Pi invocation without adding it to your settings, run:
 
@@ -29,6 +29,8 @@ Optional. Cliff's defaults apply when neither config file is present. Create `~/
 ```json
 {
   "mode": "active",
+  "thresholdTokens": 200000,
+  "keepRecentTurns": 3,
   "includeReasoning": true,
   "assistantTextMaxTokens": "unlimited",
   "reasoningTextMaxTokens": "unlimited",
@@ -40,46 +42,41 @@ Optional. Cliff's defaults apply when neither config file is present. Create `~/
 
 Add `<project>/.pi/cliff.json` to override values for one project. Project settings override global settings, which override the built-in defaults.
 
-| Key                       | Default       | Meaning                                                                   |
-| ------------------------- | ------------- | ------------------------------------------------------------------------- |
-| `mode`                    | `active`      | `active`, `shadow`, or `off`                                               |
-| `includeReasoning`        | `true`        | Include assistant reasoning text                                          |
-| `assistantTextMaxTokens`  | `"unlimited"` | Approximate-token limit for visible assistant text per message             |
-| `reasoningTextMaxTokens`  | `"unlimited"` | Approximate-token limit for reasoning text per assistant message            |
-| `toolCallMaxTokens`       | `37.5`        | Approximate-token limit for serialized tool-call arguments                 |
-| `toolResultMaxTokens`     | `125`         | Drop tool results whole when they exceed this approximate-token limit      |
-| `userTextMaxTokens`       | `5000`        | Approximate-token limit for user and system text per block, including head |
+| Key                      | Default       | Meaning                                                                    |
+| ------------------------ | ------------- | -------------------------------------------------------------------------- |
+| `mode`                   | `active`      | `active`, `shadow`, or `off`                                               |
+| `thresholdTokens`        | `200000`      | Full-known-input estimate for an automatic cut                             |
+| `keepRecentTurns`        | `3`           | Recent assistant/tool steps kept intact by an automatic cut                |
+| `includeReasoning`       | `true`        | Include assistant reasoning text                                           |
+| `assistantTextMaxTokens` | `"unlimited"` | Approximate-token limit for visible assistant text per message             |
+| `reasoningTextMaxTokens` | `"unlimited"` | Approximate-token limit for reasoning text per assistant message           |
+| `toolCallMaxTokens`      | `37.5`        | Approximate-token limit for serialized tool-call arguments                 |
+| `toolResultMaxTokens`    | `125`         | Drop tool results whole when they exceed this approximate-token limit      |
+| `userTextMaxTokens`      | `5000`        | Approximate-token limit for user and system text per block, including head |
 
-The five `*MaxTokens` settings are estimates, not actual tokenizer counts: estimated tokens = Unicode code points ÷ 4. After standard JavaScript JSON number parsing, they accept finite nonnegative numbers in quarter-token steps only, and the converted code-point cap (`tokens * 4`) must be a safe integer. Cliff does not round parsed limits. JSON parsing itself uses floating-point numbers, so extreme literals can lose precision or underflow to zero. A limit of `0` keeps no content in its category; `"unlimited"` disables it. Positive text limits append `...` after the capped payload. Speaker labels, tool signature wrappers, and appended ellipses are outside text payload caps. Tool-call limits apply to serialized arguments only; tool results are never truncated and oversized results are dropped whole. These are per-content limits, not total-context budgets.
+The five `*MaxTokens` settings are estimates, not actual tokenizer counts: estimated tokens = Unicode code points ÷ 4. After standard JavaScript JSON number parsing, they accept finite nonnegative numbers in quarter-token steps only, and the converted code-point cap (`tokens * 4`) must be a safe integer. Cliff does not round parsed limits. JSON parsing itself uses floating-point numbers, so extreme literals can lose precision or underflow to zero. A limit of `0` keeps no content in its category; `"unlimited"` disables it. Positive text limits append `...` after the capped payload. Speaker labels, tool signature wrappers, and appended ellipses are outside text payload caps. Tool-call limits apply to serialized arguments only; tool results are never truncated and oversized results are dropped whole. These five per-content limits are not total-context budgets. `thresholdTokens` and `keepRecentTurns` must be positive safe integers; the former estimates the full known input, not tokens measured at the provider.
 
 Both the previous `*MaxChars` settings and historical spellings are rejected, not aliased or rewritten. Current keys migrate as `assistantTextMaxChars` → `assistantTextMaxTokens`, `reasoningTextMaxChars` → `reasoningTextMaxTokens`, `toolCallMaxChars` → `toolCallMaxTokens`, `toolResultMaxChars` → `toolResultMaxTokens`, and `userTextMaxChars` → `userTextMaxTokens`; divide finite code-point values by 4, preserving their `0` and `"unlimited"` meanings. Historical keys migrate as `thoughtMaxChars` → `assistantTextMaxTokens`, `thinkingMaxChars` → `reasoningTextMaxTokens`, `cmdMaxChars` → `toolCallMaxTokens`, `resultMaxChars` → `toolResultMaxTokens`, and `humanMaxChars` → `userTextMaxTokens`; divide finite values by 4, with old text-limit `0` mapped to `"unlimited"` and `resultMaxChars: 0` remaining `0`. `keepThinking` still maps to `includeReasoning`.
 
-In `active` mode, bad configuration cancels compaction and tells you why; Cliff never falls back to a model summary silently. In `shadow` and `off`, pi owns compaction. When a valid config file selects `"off"`, errors in the other file do not block Pi, and `/cliff` reports them. An invalid file is ignored as a whole, including any `mode` value it contains. Unknown keys, negative or non-finite values, values that are not exact quarter-token steps, unsafe converted code-point limits, and limits other than a number or `"unlimited"` are errors.
+In `active` mode, bad configuration prevents a Cliff turn-boundary draft. When Pi reaches an eligible native compaction hook, Cliff cancels rather than falling through to a model summary. `/cliff` reports configuration errors. In `shadow` and `off`, Pi owns compaction. When a valid config file selects `"off"`, errors in the other file do not block Pi, and `/cliff` reports them. An invalid file is ignored as a whole, including any `mode` value it contains. Unknown keys, negative or non-finite values, values that are not exact quarter-token steps, unsafe converted code-point limits, and limits other than a number or `"unlimited"` are errors.
 
 ## Who owns what
 
-pi decides when to compact and how much recent context to keep. Cliff decides what the summary says.
+After a successful assistant/tool step, Cliff estimates the known full input, including the live system prompt and active tool declarations. If it exceeds `thresholdTokens` or the estimated model input limit, Cliff chooses an older assistant-step cut, preserves three recent assistant/tool steps by default, and gives Pi a mechanical compaction draft. Pi persists it before the next request. Pi's `compaction.keepRecentTokens` does not choose this Cliff-owned cut.
 
-|                                  | Owner                                                           |
-| -------------------------------- | --------------------------------------------------------------- |
-| When compaction happens          | pi, through `compaction.enabled` and `compaction.reserveTokens` |
-| How much recent context survives | pi, through `compaction.keepRecentTokens`                       |
-| What the summary contains        | Cliff                                                           |
-| Persistence and the session file | pi                                                              |
-
-There is no `thresholdTokens` and no `keepRecent` here on purpose. Upstream needed those because it was a proxy guessing at token counts and choosing its own cut. pi has real accounting and its own cut rule. If you are porting a proxy configuration, upstream's `--threshold T` on a window of `W` is roughly pi's `reserveTokens = W - T`.
+Manual `/compact` still uses Pi's cut and Pi's retained-token setting. Pi also owns persistence, its own automatic threshold/overflow checks, and their eligibility gate. If native preparation succeeds, active Cliff supplies a mechanical cut or cancels; it never falls through to Pi's model summariser. An oversized first request can precede Cliff's first completed step. A later queued prompt or changed model/tools can differ from Cliff's boundary estimate. No exact provider-fit or billed-savings claim follows from the estimate.
 
 ## Modes
 
 `active` is the default. Cliff writes the summary and pi persists it.
 
-`shadow` computes the summary for comparison, then delegates to pi. Pi's model summariser still runs, so the no-model guarantee applies only to `active` mode.
+`shadow` does not make Cliff-owned automatic cuts. When Pi calls its native hook, Cliff computes a comparison summary and delegates to Pi. Pi's model summariser can still run, so the no-model guarantee applies only to `active` mode with no competing compaction extension.
 
 `off` returns control to pi entirely.
 
 ## Failure
 
-If Cliff cannot read active-mode config, project Pi's selected messages, restore its own opening head, render a summary, or honor an abort, it cancels that compaction and reports why. History is unchanged. It never substitutes a degraded summary or falls through to Pi's model summariser. Optional notifications and outcome receipts are isolated: their failure cannot hand control to the model summariser.
+At a completed-step boundary, Cliff only returns a draft when it can validate a reducing cut; otherwise it leaves history unchanged. When Pi invokes the native automatic or manual compaction hook, active Cliff cancels on failure rather than substituting a degraded summary or falling through to Pi's model summariser. Optional notifications and outcome receipts cannot change that result. Pi's own hook is not called when its retained-token setting leaves no eligible native cut.
 
 In `shadow` and `off`, Cliff delegates to pi. If something in Cliff is breaking and you need compaction back immediately, set `mode` to `"off"`.
 
@@ -98,8 +95,8 @@ After an active Cliff compaction you get a short committed-status line. `/cliff`
 ## What you lose against the proxy
 
 - The opening turns are preserved as text inside the summary, and carried forward across later compactions. Their original message roles, boundaries, and any images in them are not. pi stores one summary plus one contiguous suffix, so there is no slot for a separate opening block.
-- Upstream keeps three recent assistant turns. pi keeps a token budget instead.
-- Upstream retries a provider rejection by shedding more context. Here pi owns overflow recovery; Cliff uses only its lean renderer policy (drop thinking and cap assistant text at 300 Unicode code points, or 75 estimated tokens), without estimating a provider-fit budget or evicting summary parts. The result may still exceed the provider's limit.
+- Cliff now retains three recent assistant/tool steps on its own automatic cuts; Pi still chooses the kept tail for manual compaction and gates its own automatic/overflow hooks with a token budget.
+- Upstream retries a provider rejection by shedding more context. Here Pi owns overflow retry and may find no eligible native cut under a large retained-token setting. Cliff uses lean overflow rendering when Pi reaches its hook, but cannot guarantee recovery before a first completed step.
 - Upstream's `cliff watch` terminal view has no equivalent. `/cliff` and the session file are what you get.
 
 ## Verify
@@ -110,7 +107,7 @@ python3 scripts/gen-fixtures.py
 PI_MODEL_ARGS="--provider <name> --model <name>" scripts/verify-live.sh  # optional live-model check
 ```
 
-`pnpm check` runs TypeScript, type-aware Oxlint, formatting, the upstream renderer fixtures, and the real-Pi SDK integration tests. The SDK tests exercise manual `session.compact()` with model/network tripwires; automatic threshold and overflow behavior are covered at the direct hook boundary only. No live model is called by the offline suite.
+`pnpm check` runs TypeScript, type-aware Oxlint, formatting, the upstream renderer fixtures, and the real-Pi SDK integration tests. The offline SDK tests include a local fake provider, a real `turn_end` draft, and the next dispatched provider request with Pi's 64K tail. No paid model is called by the offline suite.
 
 `gen-fixtures.py` calls upstream's own `compact()` and stores the resulting strings as the renderer oracle. Select a clone with `--upstream-src` or `CLIFF_UPSTREAM_SRC`; with neither, it uses `~/.cache/pi-cliff/cliffcompaction/src`. The checked-in provenance records the source selector and upstream revision, not a machine-specific absolute path.
 

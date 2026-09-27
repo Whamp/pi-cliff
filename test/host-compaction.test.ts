@@ -456,6 +456,8 @@ describe("real Pi SDK compaction integration", () => {
         expect(defaultJson).toBeDefined();
         expect(JSON.parse(defaultJson ?? "")).toEqual({
           mode: "active",
+          thresholdTokens: 200_000,
+          keepRecentTurns: 3,
           includeReasoning: true,
           assistantTextMaxTokens: "unlimited",
           reasoningTextMaxTokens: "unlimited",

@@ -33,6 +33,8 @@ export type EstimatedTokenLimit = number | "unlimited";
 export interface CliffConfig {
   /** See {@link CliffMode}. */
   mode: CliffMode;
+  thresholdTokens: number;
+  keepRecentTurns: number;
   includeReasoning: boolean;
   assistantTextMaxTokens: EstimatedTokenLimit;
   reasoningTextMaxTokens: EstimatedTokenLimit;
@@ -44,6 +46,8 @@ export interface CliffConfig {
 /** Public defaults derived from the unchanged renderer's code-point caps divided by four. */
 export const DEFAULT_CLIFF_CONFIG: CliffConfig = {
   mode: "active",
+  thresholdTokens: 200_000,
+  keepRecentTurns: 3,
   includeReasoning: true,
   assistantTextMaxTokens: "unlimited",
   reasoningTextMaxTokens: "unlimited",
@@ -63,6 +67,8 @@ export const CLIFF_CONFIG_FILE_NAME = "cliff.json";
  */
 export interface CliffConfigSettings {
   mode?: CliffMode;
+  thresholdTokens?: number;
+  keepRecentTurns?: number;
   includeReasoning?: boolean;
   assistantTextMaxTokens?: EstimatedTokenLimit;
   reasoningTextMaxTokens?: EstimatedTokenLimit;
@@ -145,6 +151,14 @@ interface CliffConfigOption<Key extends keyof CliffConfig = keyof CliffConfig> {
  */
 export const CLIFF_CONFIG_OPTIONS = [
   { key: "mode", description: 'Compaction owner: "active", "shadow", or "off".' },
+  {
+    key: "thresholdTokens",
+    description: "Estimated full-input threshold for automatic compaction.",
+  },
+  {
+    key: "keepRecentTurns",
+    description: "Assistant/tool steps kept intact after automatic compaction.",
+  },
   {
     key: "includeReasoning",
     description: "Include assistant reasoning text.",
@@ -229,6 +243,8 @@ export const CLIFF_CONFIG_OPTIONS = [
   },
 ] as const satisfies readonly [
   CliffConfigOption<"mode">,
+  CliffConfigOption<"thresholdTokens">,
+  CliffConfigOption<"keepRecentTurns">,
   CliffConfigOption<"includeReasoning">,
   CliffConfigOption<"assistantTextMaxTokens">,
   CliffConfigOption<"reasoningTextMaxTokens">,
@@ -284,7 +300,7 @@ export function formatCliffConfigHelp(): string {
     "Speaker labels, tool signature wrappers, and appended ellipses are outside text payload caps; oversized tool results are dropped whole.",
     "These per-content limits are not total-context budgets. Overflow keeps the existing internal 300-code-point assistant-text cap (75 estimated tokens), not a provider-fit promise.",
     "Precedence: built-in defaults, then the global file, then the project file.",
-    "Pi owns the compaction trigger, cut, kept tail, and persistence; Cliff only renders the summary.",
+    "Cliff chooses automatic cuts after completed steps; Pi still owns manual cuts and session persistence.",
     "Default cliff.json:",
     "```json",
     JSON.stringify(DEFAULT_CLIFF_CONFIG, null, 2),
@@ -306,6 +322,12 @@ export function mergeCliffConfig(layers: readonly CliffConfigSettings[]): CliffC
   for (const settings of layers) {
     if (settings.mode !== undefined) {
       config.mode = settings.mode;
+    }
+    if (settings.thresholdTokens !== undefined) {
+      config.thresholdTokens = settings.thresholdTokens;
+    }
+    if (settings.keepRecentTurns !== undefined) {
+      config.keepRecentTurns = settings.keepRecentTurns;
     }
     if (settings.includeReasoning !== undefined) {
       config.includeReasoning = settings.includeReasoning;
@@ -471,6 +493,14 @@ function readCliffConfigSetting(
       const mode = readCliffMode(raw, label, errors);
       return mode === undefined ? {} : { mode };
     }
+    case "thresholdTokens": {
+      const thresholdTokens = readCliffPositiveInteger(key, raw, label, errors);
+      return thresholdTokens === undefined ? {} : { thresholdTokens };
+    }
+    case "keepRecentTurns": {
+      const keepRecentTurns = readCliffPositiveInteger(key, raw, label, errors);
+      return keepRecentTurns === undefined ? {} : { keepRecentTurns };
+    }
     case "includeReasoning": {
       const includeReasoning = readCliffBoolean(key, raw, label, errors);
       return includeReasoning === undefined ? {} : { includeReasoning };
@@ -501,6 +531,21 @@ function readCliffConfigSetting(
       throw new Error(`Cliff config has no reader for the key ${String(unhandled)}`);
     }
   }
+}
+
+function readCliffPositiveInteger(
+  key: string,
+  raw: unknown,
+  label: string,
+  errors: string[],
+): number | undefined {
+  if (typeof raw === "number" && Number.isSafeInteger(raw) && raw > 0) {
+    return raw;
+  }
+  errors.push(
+    cliffProblem(label, `"${key}" must be a positive safe integer, not ${describeValue(raw)}`),
+  );
+  return undefined;
 }
 
 function readCliffMode(raw: unknown, label: string, errors: string[]): CliffMode | undefined {

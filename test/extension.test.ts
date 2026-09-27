@@ -104,8 +104,16 @@ function makeExtension(
         notifyCalls.push({ message, kind });
       },
     },
-    model: { contextWindow: 64 },
+    model: { contextWindow: 64_000, maxTokens: 1_000 },
+    getSystemPrompt: () => "",
     sessionManager: {
+      getHeader: () => ({
+        type: "session",
+        version: 3,
+        id: "cliff-extension-test",
+        timestamp: new Date(TIMESTAMP).toISOString(),
+        cwd: "/project",
+      }),
       getBranch: () => {
         branchCalls += 1;
         return options.branch ?? [];
@@ -225,31 +233,14 @@ async function runCommand(harness: ReturnType<typeof makeExtension>, args: strin
 }
 
 describe("native compaction hook", () => {
-  it("keeps overflow's 75-estimated-token equivalent at the existing 300-code-point cap", async () => {
-    const harness = makeExtension({ config: { assistantTextMaxTokens: 75 } });
-    const result = await compact(
-      harness,
-      event({
-        reason: "overflow",
-        messages: [user("opening task"), assistant("ACTION-DETAIL ".repeat(80), 50_000)],
-        branchEntries: [
-          {
-            type: "message",
-            id: "pi-kept-entry",
-            parentId: null,
-            timestamp: new Date(TIMESTAMP).toISOString(),
-            message: user("kept tail"),
-          },
-        ],
-      }),
-    );
-
-    const compaction = requireCompaction(result);
-    expect(compaction).toMatchObject({ firstKeptEntryId: "pi-kept-entry", tokensBefore: 73 });
-    expect(compaction.summary).toContain(
-      `assistant: ${"ACTION-DETAIL ".repeat(80).slice(0, 300)}...`,
-    );
-  });
+  it.each(["threshold", "overflow"] as const)(
+    "cancels automatic %s when no assistant step is eligible",
+    async (reason) => {
+      const harness = makeExtension();
+      const result = await compact(harness, event({ reason, branchEntries: [] }));
+      expect(result).toEqual({ cancel: true });
+    },
+  );
 
   it("converts estimated-token settings once to exact code-point renderer caps", async () => {
     const harness = makeExtension({
@@ -423,20 +414,18 @@ describe("native compaction hook", () => {
     expect(result).toEqual({ cancel: true });
   });
 
-  it.each(["manual", "threshold", "overflow"] as const)(
-    "copies Pi's exact boundary and token count for %s compaction",
-    async (reason) => {
-      const harness = makeExtension();
-      const result = await compact(
-        harness,
-        event({ reason, firstKeptEntryId: "pi-cut-17", tokensBefore: 991 }),
-      );
-      expect(requireCompaction(result)).toMatchObject({
-        firstKeptEntryId: "pi-cut-17",
-        tokensBefore: 991,
-      });
-    },
-  );
+  it("copies Pi's exact boundary and token count for manual compaction", async () => {
+    const reason = "manual";
+    const harness = makeExtension();
+    const result = await compact(
+      harness,
+      event({ reason, firstKeptEntryId: "pi-cut-17", tokensBefore: 991 }),
+    );
+    expect(requireCompaction(result)).toMatchObject({
+      firstKeptEntryId: "pi-cut-17",
+      tokensBefore: 991,
+    });
+  });
 
   it("preserves an established empty head across later opening turns", async () => {
     const harness = makeExtension();

@@ -7,6 +7,7 @@
 
 import { join } from "node:path";
 import {
+  buildSessionProjection,
   CONFIG_DIR_NAME,
   getAgentDir,
   getLatestCompactionEntry,
@@ -17,7 +18,10 @@ import {
   type SessionBeforeCompactResult,
   type SessionCompactEvent,
   type SessionEntry,
+  type TurnEndEvent,
+  type BoundaryResult,
 } from "@earendil-works/pi-coding-agent";
+import { planCliffAutoCompaction } from "./auto-compaction.js";
 import {
   assembleSummary,
   headRegionEnd,
@@ -102,6 +106,7 @@ export function createCliffExtension(
   dependencies: CliffExtensionDependencies,
 ): void {
   pi.on("session_before_compact", (event, ctx) => runCompactionHook(event, ctx, dependencies, pi));
+  pi.on("turn_end", (event, ctx) => runCompletedCliffStep(event, ctx, dependencies));
   pi.on("session_compact", (event, ctx) => {
     reportCommittedCompaction(event, ctx);
   });
@@ -146,12 +151,77 @@ type CliffRecordRead =
   | { state: "invalid" }
   | { state: "record"; record: CliffHeadRecord };
 
+function runCompletedCliffStep(
+  event: TurnEndEvent,
+  ctx: ExtensionContext,
+  dependencies: CliffExtensionDependencies,
+): BoundaryResult | undefined {
+  if (
+    event.outcome !== "completed" ||
+    (event.message.role === "assistant" && event.message.stopReason === "length")
+  ) {
+    return undefined;
+  }
+  try {
+    const read = readCliffConfig(ctx, dependencies);
+    if (!read.ok || read.mode !== "active" || read.loaded.errors.length > 0) {
+      return undefined;
+    }
+    const decision = planCliffAutoCompaction(
+      {
+        cwd: ctx.cwd,
+        header: ctx.sessionManager.getHeader(),
+        branch: ctx.sessionManager.getBranch(),
+        entries: event.context.contextEntries,
+        messages: event.context.contextMessages,
+        model: ctx.model,
+        signal: ctx.signal,
+      },
+      read.loaded.config,
+      "completed-step",
+      renderCliffSummary,
+    );
+    if (decision.kind !== "compact") {
+      if (decision.kind === "deny") {
+        reportCliffDiagnostic(
+          ctx,
+          `Cliff automatic compaction skipped: ${decision.reason}`,
+          "warning",
+        );
+      }
+      return undefined;
+    }
+    return {
+      entries: [
+        {
+          type: "compaction",
+          summary: decision.summary,
+          firstKeptEntryId: decision.firstKeptEntryId,
+          details: {
+            [CLIFF_DETAILS_KEY]: {
+              version: CLIFF_DETAILS_VERSION,
+              head: decision.head,
+            } satisfies CliffHeadRecord,
+          },
+        },
+      ],
+    };
+  } catch (error) {
+    reportCliffDiagnostic(
+      ctx,
+      `Cliff automatic compaction failed: ${describeError(error)}`,
+      "error",
+    );
+    return undefined;
+  }
+}
+
 /** Contains the entire hook boundary so unexpected reporting failures cannot invoke Pi's model path. */
 function runCompactionHook(
   event: SessionBeforeCompactEvent,
   ctx: ExtensionContext,
   dependencies: CliffExtensionDependencies,
-  recorder: CliffOutcomeRecorder,
+  recorder: CliffExtensionAPI,
 ): SessionBeforeCompactResult | undefined {
   let mode = DEFAULT_CLIFF_CONFIG.mode;
   try {
@@ -173,6 +243,40 @@ function runCompactionHook(
         mode,
         event.reason,
       );
+    }
+
+    if (mode === "active" && event.reason !== "manual") {
+      const projected = buildSessionProjection(event.branchEntries);
+      const decision = planCliffAutoCompaction(
+        {
+          cwd: ctx.cwd,
+          header: ctx.sessionManager.getHeader(),
+          branch: event.branchEntries,
+          entries: projected.entries,
+          messages: projected.messages,
+          model: ctx.model,
+          signal: event.signal,
+        },
+        read.loaded.config,
+        event.reason === "overflow" ? "native-overflow" : "native-threshold",
+        renderCliffSummary,
+      );
+      if (decision.kind !== "compact") {
+        return reportFailure(host, recorder, "projection", decision.reason, mode, event.reason);
+      }
+      return {
+        compaction: {
+          summary: decision.summary,
+          firstKeptEntryId: decision.firstKeptEntryId,
+          tokensBefore: event.preparation.tokensBefore,
+          details: {
+            [CLIFF_DETAILS_KEY]: {
+              version: CLIFF_DETAILS_VERSION,
+              head: decision.head,
+            } satisfies CliffHeadRecord,
+          },
+        },
+      };
     }
 
     if (event.customInstructions !== undefined && event.customInstructions.trim() !== "") {
@@ -246,6 +350,19 @@ function attemptCliffSummary(event: SessionBeforeCompactEvent, config: CliffConf
     ...event.preparation.messagesToSummarize,
     ...event.preparation.turnPrefixMessages,
   ];
+  return renderCliffSummary(summarized, event.branchEntries, config, event.reason, event.signal);
+}
+
+function renderCliffSummary(
+  summarized: readonly PiAgentMessage[],
+  branch: SessionEntry[],
+  config: CliffConfig,
+  reason: SessionBeforeCompactEvent["reason"],
+  signal?: AbortSignal,
+): CliffAttempt {
+  if (signal?.aborted) {
+    return { ok: false, stage: "aborted", message: "the compaction abort signal was raised" };
+  }
   let units: SummaryUnit[];
   try {
     units = toSummaryUnits(summarized);
@@ -253,7 +370,7 @@ function attemptCliffSummary(event: SessionBeforeCompactEvent, config: CliffConf
     return { ok: false, stage: "projection", message: describeError(error) };
   }
 
-  const carried = readCarriedHead(event.branchEntries);
+  const carried = readCarriedHead(branch);
   if (carried.state === "invalid") {
     return {
       ok: false,
@@ -267,7 +384,7 @@ function attemptCliffSummary(event: SessionBeforeCompactEvent, config: CliffConf
 
   let rendered;
   try {
-    rendered = renderSummary(renderUnits, toSummaryPolicy(config), event.reason);
+    rendered = renderSummary(renderUnits, toSummaryPolicy(config), reason);
   } catch (error) {
     return { ok: false, stage: "render", message: describeError(error) };
   }
