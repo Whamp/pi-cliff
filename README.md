@@ -62,7 +62,7 @@ In `active` mode, bad configuration prevents a Cliff turn-boundary draft. When P
 
 ## Who owns what
 
-After a successful assistant/tool step, Cliff estimates the compressible middle, the working history between the system/tools head and the retained tail. If it exceeds `workingTokens`, Cliff chooses an older assistant-step cut, preserves three recent assistant/tool steps by default, and previews the draft against the model's input limit before returning it. Pi persists it before the next request. Pi's `compaction.keepRecentTokens` does not choose this Cliff-owned cut, and head growth does not spend the working budget.
+After a successful assistant/tool step, Cliff estimates the compressible middle, the working history between the system/tools head and the retained tail. If it exceeds `workingTokens`, Cliff chooses an older assistant-step cut, preserves three recent assistant/tool steps by default, and previews the draft against the model's input limit before returning it. Pi persists it before the next request. Pi's `compaction.keepRecentTokens` does not choose this Cliff-owned cut, and head growth does not spend the working budget. A step whose assistant message stopped on length is not a boundary. When the protected three-step preview exceeds the model limit, Cliff retries with one recent step; a summary that merely fails to shrink the input never degrades the tail.
 
 Manual `/compact` still uses Pi's cut and Pi's retained-token setting. Pi also owns persistence, its own automatic threshold/overflow checks, and their eligibility gate. If native preparation succeeds, active Cliff supplies a mechanical cut or cancels; it never falls through to Pi's model summariser. An oversized first request can precede Cliff's first completed step. A later queued prompt or changed model/tools can differ from Cliff's boundary estimate. No exact provider-fit or billed-savings claim follows from the estimate.
 
@@ -95,7 +95,7 @@ After an active Cliff compaction you get a short committed-status line. `/cliff`
 ## What you lose against the proxy
 
 - The opening turns are preserved as text inside the summary, and carried forward across later compactions. Their original message roles, boundaries, and any images in them are not. pi stores one summary plus one contiguous suffix, so there is no slot for a separate opening block.
-- Cliff now retains three recent assistant/tool steps on its own automatic cuts; Pi still chooses the kept tail for manual compaction and gates its own automatic/overflow hooks with a token budget.
+- Cliff now retains three recent assistant/tool steps on its own automatic cuts, dropping to one only when the three-step preview exceeds the model limit; Pi still chooses the kept tail for manual compaction and gates its own automatic/overflow hooks with a token budget.
 - Upstream retries a provider rejection by shedding more context. Here Pi owns overflow retry and may find no eligible native cut under a large retained-token setting. Cliff uses lean overflow rendering when Pi reaches its hook, but cannot guarantee recovery before a first completed step.
 - Upstream's `cliff watch` terminal view has no equivalent. `/cliff` and the session file are what you get.
 
