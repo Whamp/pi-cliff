@@ -137,7 +137,7 @@ async function runSdkBoundary(
         cliffConfigPath,
         JSON.stringify({
           mode: mode === "off" || mode === "shadow" ? mode : "active",
-          thresholdTokens: mode === "native-cancel" || mode === "native-supply" ? 200_000 : 3_500,
+          workingTokens: mode === "native-cancel" || mode === "native-supply" ? 200_000 : 3_500,
           keepRecentTurns: mode === "native-cancel" ? 100 : 3,
         }),
       );
@@ -402,7 +402,7 @@ it("previews a current-branch assistant cut without mutating the session", () =>
     signal: undefined,
   };
   const renderer = () => ({ ok: true as const, summary: "Opening task", head: [] });
-  const config = { ...DEFAULT_CLIFF_CONFIG, thresholdTokens: 1 };
+  const config = { ...DEFAULT_CLIFF_CONFIG, workingTokens: 1 };
   expect(
     planCliffAutoCompaction(snapshot, DEFAULT_CLIFF_CONFIG, "completed-step", renderer),
   ).toEqual({

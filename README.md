@@ -29,7 +29,7 @@ Optional. Cliff's defaults apply when neither config file is present. Create `~/
 ```json
 {
   "mode": "active",
-  "thresholdTokens": 200000,
+  "workingTokens": 120000,
   "keepRecentTurns": 3,
   "includeReasoning": true,
   "assistantTextMaxTokens": "unlimited",
@@ -45,7 +45,7 @@ Add `<project>/.pi/cliff.json` to override values for one project. Project setti
 | Key                      | Default       | Meaning                                                                    |
 | ------------------------ | ------------- | -------------------------------------------------------------------------- |
 | `mode`                   | `active`      | `active`, `shadow`, or `off`                                               |
-| `thresholdTokens`        | `200000`      | Full-known-input estimate for an automatic cut                             |
+| `workingTokens`         | `120000`      | Compressible-middle estimate that triggers an automatic cut; head and retained tail excluded |
 | `keepRecentTurns`        | `3`           | Recent assistant/tool steps kept intact by an automatic cut                |
 | `includeReasoning`       | `true`        | Include assistant reasoning text                                           |
 | `assistantTextMaxTokens` | `"unlimited"` | Approximate-token limit for visible assistant text per message             |
@@ -54,7 +54,7 @@ Add `<project>/.pi/cliff.json` to override values for one project. Project setti
 | `toolResultMaxTokens`    | `125`         | Drop tool results whole when they exceed this approximate-token limit      |
 | `userTextMaxTokens`      | `5000`        | Approximate-token limit for user and system text per block, including head |
 
-The five `*MaxTokens` settings are estimates, not actual tokenizer counts: estimated tokens = Unicode code points ÷ 4. After standard JavaScript JSON number parsing, they accept finite nonnegative numbers in quarter-token steps only, and the converted code-point cap (`tokens * 4`) must be a safe integer. Cliff does not round parsed limits. JSON parsing itself uses floating-point numbers, so extreme literals can lose precision or underflow to zero. A limit of `0` keeps no content in its category; `"unlimited"` disables it. Positive text limits append `...` after the capped payload. Speaker labels, tool signature wrappers, and appended ellipses are outside text payload caps. Tool-call limits apply to serialized arguments only; tool results are never truncated and oversized results are dropped whole. These five per-content limits are not total-context budgets. `thresholdTokens` and `keepRecentTurns` must be positive safe integers; the former estimates the full known input, not tokens measured at the provider.
+The five `*MaxTokens` settings are estimates, not actual tokenizer counts: estimated tokens = Unicode code points ÷ 4. After standard JavaScript JSON number parsing, they accept finite nonnegative numbers in quarter-token steps only, and the converted code-point cap (`tokens * 4`) must be a safe integer. Cliff does not round parsed limits. JSON parsing itself uses floating-point numbers, so extreme literals can lose precision or underflow to zero. A limit of `0` keeps no content in its category; `"unlimited"` disables it. Positive text limits append `...` after the capped payload. Speaker labels, tool signature wrappers, and appended ellipses are outside text payload caps. Tool-call limits apply to serialized arguments only; tool results are never truncated and oversized results are dropped whole. These five per-content limits are not total-context budgets. `workingTokens` and `keepRecentTurns` must be positive safe integers. `workingTokens` estimates the compressible middle only, not tokens measured at the provider.
 
 Both the previous `*MaxChars` settings and historical spellings are rejected, not aliased or rewritten. Current keys migrate as `assistantTextMaxChars` → `assistantTextMaxTokens`, `reasoningTextMaxChars` → `reasoningTextMaxTokens`, `toolCallMaxChars` → `toolCallMaxTokens`, `toolResultMaxChars` → `toolResultMaxTokens`, and `userTextMaxChars` → `userTextMaxTokens`; divide finite code-point values by 4, preserving their `0` and `"unlimited"` meanings. Historical keys migrate as `thoughtMaxChars` → `assistantTextMaxTokens`, `thinkingMaxChars` → `reasoningTextMaxTokens`, `cmdMaxChars` → `toolCallMaxTokens`, `resultMaxChars` → `toolResultMaxTokens`, and `humanMaxChars` → `userTextMaxTokens`; divide finite values by 4, with old text-limit `0` mapped to `"unlimited"` and `resultMaxChars: 0` remaining `0`. `keepThinking` still maps to `includeReasoning`.
 
@@ -62,7 +62,7 @@ In `active` mode, bad configuration prevents a Cliff turn-boundary draft. When P
 
 ## Who owns what
 
-After a successful assistant/tool step, Cliff estimates the known full input, including the live system prompt and active tool declarations. If it exceeds `thresholdTokens` or the estimated model input limit, Cliff chooses an older assistant-step cut, preserves three recent assistant/tool steps by default, and gives Pi a mechanical compaction draft. Pi persists it before the next request. Pi's `compaction.keepRecentTokens` does not choose this Cliff-owned cut.
+After a successful assistant/tool step, Cliff estimates the compressible middle, the working history between the system/tools head and the retained tail. If it exceeds `workingTokens`, Cliff chooses an older assistant-step cut, preserves three recent assistant/tool steps by default, and previews the draft against the model's input limit before returning it. Pi persists it before the next request. Pi's `compaction.keepRecentTokens` does not choose this Cliff-owned cut, and head growth does not spend the working budget.
 
 Manual `/compact` still uses Pi's cut and Pi's retained-token setting. Pi also owns persistence, its own automatic threshold/overflow checks, and their eligibility gate. If native preparation succeeds, active Cliff supplies a mechanical cut or cancels; it never falls through to Pi's model summariser. An oversized first request can precede Cliff's first completed step. A later queued prompt or changed model/tools can differ from Cliff's boundary estimate. No exact provider-fit or billed-savings claim follows from the estimate.
 

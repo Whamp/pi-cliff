@@ -33,7 +33,7 @@ export type EstimatedTokenLimit = number | "unlimited";
 export interface CliffConfig {
   /** See {@link CliffMode}. */
   mode: CliffMode;
-  thresholdTokens: number;
+  workingTokens: number;
   keepRecentTurns: number;
   includeReasoning: boolean;
   assistantTextMaxTokens: EstimatedTokenLimit;
@@ -46,7 +46,7 @@ export interface CliffConfig {
 /** Public defaults derived from the unchanged renderer's code-point caps divided by four. */
 export const DEFAULT_CLIFF_CONFIG: CliffConfig = {
   mode: "active",
-  thresholdTokens: 200_000,
+  workingTokens: 120_000,
   keepRecentTurns: 3,
   includeReasoning: true,
   assistantTextMaxTokens: "unlimited",
@@ -67,7 +67,7 @@ export const CLIFF_CONFIG_FILE_NAME = "cliff.json";
  */
 export interface CliffConfigSettings {
   mode?: CliffMode;
-  thresholdTokens?: number;
+  workingTokens?: number;
   keepRecentTurns?: number;
   includeReasoning?: boolean;
   assistantTextMaxTokens?: EstimatedTokenLimit;
@@ -152,8 +152,9 @@ interface CliffConfigOption<Key extends keyof CliffConfig = keyof CliffConfig> {
 export const CLIFF_CONFIG_OPTIONS = [
   { key: "mode", description: 'Compaction owner: "active", "shadow", or "off".' },
   {
-    key: "thresholdTokens",
-    description: "Estimated full-input threshold for automatic compaction.",
+    key: "workingTokens",
+    description:
+      "Estimated compressible-middle budget for automatic compaction; head and retained tail excluded.",
   },
   {
     key: "keepRecentTurns",
@@ -243,7 +244,7 @@ export const CLIFF_CONFIG_OPTIONS = [
   },
 ] as const satisfies readonly [
   CliffConfigOption<"mode">,
-  CliffConfigOption<"thresholdTokens">,
+  CliffConfigOption<"workingTokens">,
   CliffConfigOption<"keepRecentTurns">,
   CliffConfigOption<"includeReasoning">,
   CliffConfigOption<"assistantTextMaxTokens">,
@@ -323,8 +324,8 @@ export function mergeCliffConfig(layers: readonly CliffConfigSettings[]): CliffC
     if (settings.mode !== undefined) {
       config.mode = settings.mode;
     }
-    if (settings.thresholdTokens !== undefined) {
-      config.thresholdTokens = settings.thresholdTokens;
+    if (settings.workingTokens !== undefined) {
+      config.workingTokens = settings.workingTokens;
     }
     if (settings.keepRecentTurns !== undefined) {
       config.keepRecentTurns = settings.keepRecentTurns;
@@ -493,9 +494,9 @@ function readCliffConfigSetting(
       const mode = readCliffMode(raw, label, errors);
       return mode === undefined ? {} : { mode };
     }
-    case "thresholdTokens": {
-      const thresholdTokens = readCliffPositiveInteger(key, raw, label, errors);
-      return thresholdTokens === undefined ? {} : { thresholdTokens };
+    case "workingTokens": {
+      const workingTokens = readCliffPositiveInteger(key, raw, label, errors);
+      return workingTokens === undefined ? {} : { workingTokens };
     }
     case "keepRecentTurns": {
       const keepRecentTurns = readCliffPositiveInteger(key, raw, label, errors);

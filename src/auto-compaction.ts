@@ -81,7 +81,7 @@ function selectCliffAutoCut(
   return { firstKeptEntryId: firstKept.sourceEntry.id, summarized };
 }
 
-/** Chooses one reducing native Pi compaction without consulting Pi's retained-token cut. */
+/** Chooses one reducing native Pi compaction without consulting Pi's retained-token cut. The completed-step trigger measures the compressible middle only: the system/tools head and the retained tail never spend the working budget. */
 export function planCliffAutoCompaction(
   snapshot: CliffAutoSnapshot,
   config: CliffConfig,
@@ -94,25 +94,25 @@ export function planCliffAutoCompaction(
       reason: "the current system prompt and tool declarations are unavailable",
     };
   }
+  if (snapshot.header === null) {
+    return { kind: "deny", reason: "the current session has no header" };
+  }
+  const protectedCut = selectCliffAutoCut(snapshot, config.keepRecentTurns);
+  if (protectedCut === undefined) {
+    return { kind: "keep", reason: "no-older-step" };
+  }
+  const workingTokens = protectedCut.summarized.reduce(
+    (sum, message) => sum + estimateTokens(message),
+    0,
+  );
+  if (trigger === "completed-step" && workingTokens <= config.workingTokens) {
+    return { kind: "keep", reason: "below-budget" };
+  }
   const beforeTokens = snapshot.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
   const modelLimit =
     snapshot.model === undefined
       ? Number.POSITIVE_INFINITY
       : Math.max(0, snapshot.model.contextWindow - snapshot.model.maxTokens);
-  if (
-    trigger === "completed-step" &&
-    beforeTokens <= Math.min(config.thresholdTokens, modelLimit)
-  ) {
-    return { kind: "keep", reason: "below-budget" };
-  }
-  if (snapshot.header === null) {
-    return { kind: "deny", reason: "the current session has no header" };
-  }
-
-  const protectedCut = selectCliffAutoCut(snapshot, config.keepRecentTurns);
-  if (protectedCut === undefined) {
-    return { kind: "keep", reason: "no-older-step" };
-  }
   const keepCounts = config.keepRecentTurns === 1 ? [1] : [config.keepRecentTurns, 1];
   for (const keepRecentTurns of keepCounts) {
     const cut =
