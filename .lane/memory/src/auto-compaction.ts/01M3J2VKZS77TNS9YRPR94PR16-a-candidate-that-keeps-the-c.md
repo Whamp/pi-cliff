@@ -4,8 +4,9 @@ anchor: function planCliffAutoCompaction
 created: 2026-09-27T18:43:22Z
 norm: '1'
 sig: c733d0a26d42c6f7
-body_hash: 0048dbd4ee1b37b4
-raw_hash: 1dc1937edbc6dcf5
+body_hash: 0c5a866d371fc44f
+raw_hash: c103594cd9d23111
+vouched: 2026-09-28T03:48:15Z
 lines: 85-163
 ---
 
