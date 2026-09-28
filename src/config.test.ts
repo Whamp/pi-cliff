@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_SUMMARY_POLICY, type CharacterLimit } from "../src/cliff.js";
+import { DEFAULT_SUMMARY_POLICY, type CharacterLimit } from "./cliff.js";
 import {
   CLIFF_CONFIG_FILE_NAME,
   CLIFF_CONFIG_OPTIONS,
@@ -24,7 +24,7 @@ import {
   parseCliffConfig,
   type CliffConfigPaths,
   type EstimatedTokenLimit,
-} from "../src/config.js";
+} from "./config.js";
 
 /** Directories created by the current test, removed after it. */
 let scratch = "";

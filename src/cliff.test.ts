@@ -3,8 +3,8 @@
  *
  * Every expectation in the fixture table below is text written by upstream CliffCompaction's own
  * `compact()`, not by this port. `scripts/gen-fixtures.py` builds the Anthropic-dialect message dicts
- * behind `test/fixtures/inputs.json`, runs upstream over them, and stores the summary text in
- * `test/fixtures/expected.json`. Each case names the upstream test it mirrors.
+ * behind `src/fixtures/inputs.json`, runs upstream over them, and stores the summary text in
+ * `src/fixtures/expected.json`. Each case names the upstream test it mirrors.
  *
  * The comparison covers the summarised region only, with no head section, because upstream forwards
  * its leading messages verbatim instead of rendering them: `renderSummary` reports that region as
@@ -32,7 +32,7 @@ import {
   type SummaryPolicy,
   type SummaryProfile,
   type SummaryUnit,
-} from "../src/cliff.js";
+} from "./cliff.js";
 
 /** Thrown when a fixture file does not hold the shape `scripts/gen-fixtures.py` and this file agree on. */
 class FixtureParseError extends Error {

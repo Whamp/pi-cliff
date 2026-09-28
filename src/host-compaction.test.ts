@@ -38,7 +38,7 @@ interface PiHarness {
   agentDir: string;
   nextProject: number;
   sdk: PiSdk;
-  registerCliff: (typeof import("../src/extension.js"))["default"];
+  registerCliff: (typeof import("./extension.js"))["default"];
   observations: HookObservation[];
   network: NetworkAttempts;
   modelCalls(): number;
@@ -104,7 +104,7 @@ async function createHarness(): Promise<PiHarness> {
   });
 
   const sdk = await import("@earendil-works/pi-coding-agent");
-  const { default: registerCliff } = await import("../src/extension.js");
+  const { default: registerCliff } = await import("./extension.js");
   const modelMethods = ["stream", "complete", "streamSimple", "completeSimple"] as const;
   const modelSpies = modelMethods.map((method) => vi.spyOn(sdk.ModelRuntime.prototype, method));
   const observations: HookObservation[] = [];

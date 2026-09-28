@@ -11,9 +11,9 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
-import { createCliffExtension } from "../src/extension.js";
-import { DEFAULT_CLIFF_CONFIG, loadCliffConfig } from "../src/config.js";
-import { planCliffAutoCompaction } from "../src/auto-compaction.js";
+import { createCliffExtension } from "./extension.js";
+import { DEFAULT_CLIFF_CONFIG, loadCliffConfig } from "./config.js";
+import { planCliffAutoCompaction } from "./auto-compaction.js";
 
 async function runSdkBoundary(
   mode:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate test/fixtures/expected.json from test/fixtures/inputs.json.
+"""Regenerate src/fixtures/expected.json from src/fixtures/inputs.json.
 
 This is the port's fidelity lever. Every expected string in the repository is written by upstream's
 own `compact()`, never by a re-implementation, so `test/cliff.test.ts` compares this TypeScript port
@@ -275,12 +275,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--inputs",
-        default=str(REPO_ROOT / "test/fixtures/inputs.json"),
+        default=str(REPO_ROOT / "src/fixtures/inputs.json"),
         help="fixture input set",
     )
     parser.add_argument(
         "--expected",
-        default=str(REPO_ROOT / "test/fixtures/expected.json"),
+        default=str(REPO_ROOT / "src/fixtures/expected.json"),
         help="where to write the generated expectations",
     )
     args = parser.parse_args()

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createCliffExtension } from "../src/extension.js";
+import { createCliffExtension } from "./extension.js";
 import {
   DEFAULT_CLIFF_CONFIG,
   loadCliffConfig,
@@ -10,7 +10,7 @@ import {
   type CliffConfigFileState,
   type CliffConfigOrigin,
   type CliffMode,
-} from "../src/config.js";
+} from "./config.js";
 import type {
   ExtensionCommandContext,
   ExtensionContext,
@@ -18,7 +18,7 @@ import type {
   SessionBeforeCompactResult,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import type { PiAgentMessage } from "../src/pi-units.js";
+import type { PiAgentMessage } from "./pi-units.js";
 
 const TIMESTAMP = 1_700_000_000_000;
 

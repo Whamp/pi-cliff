@@ -19,8 +19,8 @@ import {
   renderSummary,
   SUMMARY_HEADER,
   type SummaryUnit,
-} from "../src/cliff.js";
-import { CliffMessageMappingError, toSummaryUnits, type PiAgentMessage } from "../src/pi-units.js";
+} from "./cliff.js";
+import { CliffMessageMappingError, toSummaryUnits, type PiAgentMessage } from "./pi-units.js";
 
 const TIMESTAMP = 1_700_000_000_000;
 
