@@ -21,7 +21,7 @@ import {
   type TurnEndEvent,
   type BoundaryResult,
 } from "@earendil-works/pi-coding-agent";
-import { planCliffAutoCompaction } from "./auto-compaction.js";
+import { planCliffAutoCompaction, type CliffAutoSnapshot } from "./auto-compaction.js";
 import {
   assembleSummary,
   headRegionEnd,
@@ -167,16 +167,21 @@ function runCompletedCliffStep(
     if (!read.ok || read.mode !== "active" || read.loaded.errors.length > 0) {
       return undefined;
     }
+    const snapshot: CliffAutoSnapshot = {
+      cwd: ctx.cwd,
+      header: ctx.sessionManager.getHeader(),
+      branch: ctx.sessionManager.getBranch(),
+      entries: event.context.contextEntries,
+      messages: event.context.contextMessages,
+    };
+    if (ctx.model !== undefined) {
+      snapshot.model = ctx.model;
+    }
+    if (ctx.signal !== undefined) {
+      snapshot.signal = ctx.signal;
+    }
     const decision = planCliffAutoCompaction(
-      {
-        cwd: ctx.cwd,
-        header: ctx.sessionManager.getHeader(),
-        branch: ctx.sessionManager.getBranch(),
-        entries: event.context.contextEntries,
-        messages: event.context.contextMessages,
-        model: ctx.model,
-        signal: ctx.signal,
-      },
+      snapshot,
       read.loaded.config,
       "completed-step",
       renderCliffSummary,
@@ -247,16 +252,19 @@ function runCompactionHook(
 
     if (mode === "active" && event.reason !== "manual") {
       const projected = buildSessionProjection(event.branchEntries);
+      const snapshot: CliffAutoSnapshot = {
+        cwd: ctx.cwd,
+        header: ctx.sessionManager.getHeader(),
+        branch: event.branchEntries,
+        entries: projected.entries,
+        messages: projected.messages,
+        signal: event.signal,
+      };
+      if (ctx.model !== undefined) {
+        snapshot.model = ctx.model;
+      }
       const decision = planCliffAutoCompaction(
-        {
-          cwd: ctx.cwd,
-          header: ctx.sessionManager.getHeader(),
-          branch: event.branchEntries,
-          entries: projected.entries,
-          messages: projected.messages,
-          model: ctx.model,
-          signal: event.signal,
-        },
+        snapshot,
         read.loaded.config,
         event.reason === "overflow" ? "native-overflow" : "native-threshold",
         renderCliffSummary,

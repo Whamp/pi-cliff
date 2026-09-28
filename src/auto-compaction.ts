@@ -12,14 +12,14 @@ import type { PiAgentMessage } from "./pi-units.js";
 type CliffHeadUnit = Extract<SummaryUnit, { kind: "human" | "system" }>;
 type AutoTrigger = "completed-step" | "native-threshold" | "native-overflow";
 
-interface CliffAutoSnapshot {
+export interface CliffAutoSnapshot {
   cwd: string;
   header: SessionHeader | null;
   branch: SessionEntry[];
   entries: readonly ProjectedSessionEntry[];
   messages: readonly PiAgentMessage[];
-  model: { contextWindow: number; maxTokens: number } | undefined;
-  signal: AbortSignal | undefined;
+  model?: { contextWindow: number; maxTokens: number };
+  signal?: AbortSignal;
 }
 
 type CliffAutoRenderer = (

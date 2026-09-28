@@ -77,7 +77,9 @@ async function runSdkBoundary(
     }
     response.end("data: [DONE]\n\n");
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
 
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
   try {
@@ -319,8 +321,8 @@ it("reduces provider request bytes against the same off-mode workload", async ()
   expect(cliff).toHaveLength(2);
   expect(cliffTotal).toBeLessThan(offTotal * 0.9);
   if (process.env.CLIFF_AUTO_PERF === "1") {
-    console.info(
-      JSON.stringify({ workload: "64k-tail-low-threshold", off, cliff, offTotal, cliffTotal }),
+    process.stderr.write(
+      `${JSON.stringify({ workload: "64k-tail-low-threshold", off, cliff, offTotal, cliffTotal })}\n`,
     );
   }
 });
@@ -399,7 +401,6 @@ it("previews a current-branch assistant cut without mutating the session", () =>
     entries: projection.entries,
     messages: projection.messages,
     model: { contextWindow: 128_000, maxTokens: 1_024 },
-    signal: undefined,
   };
   const renderer = () => ({ ok: true as const, summary: "Opening task", head: [] });
   const config = { ...DEFAULT_CLIFF_CONFIG, workingTokens: 1 };
@@ -483,7 +484,9 @@ it("previews a current-branch assistant cut without mutating the session", () =>
   expect(invalid).toEqual({ kind: "keep", reason: "no-older-step" });
 
   const protectedBranch = manager.getBranch().map((entry) => {
-    if (entry.type !== "message") return entry;
+    if (entry.type !== "message") {
+      return entry;
+    }
     if (
       entry.message.role === "user" &&
       typeof entry.message.content === "string" &&
@@ -565,8 +568,6 @@ it("triggers on the compressible middle, not on head or tail growth", () => {
       branch: headManager.getBranch(),
       entries: headProjection.entries,
       messages: headProjection.messages,
-      model: undefined,
-      signal: undefined,
     },
     config,
     "completed-step",
@@ -598,8 +599,6 @@ it("triggers on the compressible middle, not on head or tail growth", () => {
       branch: tailManager.getBranch(),
       entries: tailProjection.entries,
       messages: tailProjection.messages,
-      model: undefined,
-      signal: undefined,
     },
     config,
     "completed-step",
