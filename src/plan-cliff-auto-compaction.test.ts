@@ -13,7 +13,7 @@ import {
 import { expect, it } from "vitest";
 import { createCliffExtension } from "./extension.js";
 import { DEFAULT_CLIFF_CONFIG, loadCliffConfig } from "./config.js";
-import { planCliffAutoCompaction } from "./auto-compaction.js";
+import { planCliffAutoCompaction } from "./plan-cliff-auto-compaction.js";
 
 async function runSdkBoundary(
   mode:

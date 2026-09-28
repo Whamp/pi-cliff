@@ -21,7 +21,7 @@ import {
   type TurnEndEvent,
   type BoundaryResult,
 } from "@earendil-works/pi-coding-agent";
-import { planCliffAutoCompaction, type CliffAutoSnapshot } from "./auto-compaction.js";
+import { planCliffAutoCompaction, type CliffAutoSnapshot } from "./plan-cliff-auto-compaction.js";
 import {
   assembleSummary,
   headRegionEnd,
