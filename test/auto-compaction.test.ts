@@ -520,3 +520,90 @@ it("previews a current-branch assistant cut without mutating the session", () =>
   );
   expect(protectedDecision).toEqual({ kind: "keep", reason: "protected-tail" });
 });
+
+it("triggers on the compressible middle, not on head or tail growth", () => {
+  const renderer = () => ({ ok: true as const, summary: "Opening task", head: [] });
+  const config = { ...DEFAULT_CLIFF_CONFIG, workingTokens: 1_000 };
+  const assistantMessage = (text: string, timestamp: number) => ({
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "openai-completions",
+    provider: "cliff-test",
+    model: "probe",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp,
+  });
+
+  const headManager = SessionManager.inMemory("/tmp/cliff-auto-head-test");
+  headManager.appendMessage({
+    role: "system",
+    content: "rule ".repeat(180_000),
+    toolsAdded: [],
+    timestamp: 0,
+  });
+  headManager.appendMessage({ role: "user", content: "Opening task", timestamp: 1 });
+  for (let step = 1; step <= 4; step++) {
+    headManager.appendMessage(assistantMessage(`Step ${step}`, step + 1));
+  }
+  const headProjection = headManager.buildSessionProjection();
+  const headHeader = headManager.getHeader();
+  if (headHeader === null) {
+    throw new Error("head-growth fixture has no session header");
+  }
+  const headDecision = planCliffAutoCompaction(
+    {
+      cwd: headManager.getCwd(),
+      header: headHeader,
+      branch: headManager.getBranch(),
+      entries: headProjection.entries,
+      messages: headProjection.messages,
+      model: undefined,
+      signal: undefined,
+    },
+    config,
+    "completed-step",
+    renderer,
+  );
+  expect(headDecision).toEqual({ kind: "keep", reason: "below-budget" });
+
+  const tailManager = SessionManager.inMemory("/tmp/cliff-auto-tail-test");
+  tailManager.appendMessage({
+    role: "system",
+    content: "System rules",
+    toolsAdded: [],
+    timestamp: 0,
+  });
+  tailManager.appendMessage({ role: "user", content: "Opening task", timestamp: 1 });
+  for (let step = 1; step <= 4; step++) {
+    const text = step === 1 ? `Step ${step}` : "turn ".repeat(80_000);
+    tailManager.appendMessage(assistantMessage(text, step + 1));
+  }
+  const tailProjection = tailManager.buildSessionProjection();
+  const tailHeader = tailManager.getHeader();
+  if (tailHeader === null) {
+    throw new Error("tail-growth fixture has no session header");
+  }
+  const tailDecision = planCliffAutoCompaction(
+    {
+      cwd: tailManager.getCwd(),
+      header: tailHeader,
+      branch: tailManager.getBranch(),
+      entries: tailProjection.entries,
+      messages: tailProjection.messages,
+      model: undefined,
+      signal: undefined,
+    },
+    config,
+    "completed-step",
+    renderer,
+  );
+  expect(tailDecision).toEqual({ kind: "keep", reason: "below-budget" });
+});
