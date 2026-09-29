@@ -12,6 +12,7 @@
 
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import type { CliffJsonValue, SummaryUnit, ToolSignature } from "./cliff.js";
+import { CliffMessageMappingError } from "./errors.js";
 
 /**
  * pi's agent message union: the four provider roles plus the coding agent's custom roles.
@@ -21,11 +22,6 @@ import type { CliffJsonValue, SummaryUnit, ToolSignature } from "./cliff.js";
  * `core/messages.ts`.
  */
 export type PiAgentMessage = Parameters<typeof convertToLlm>[0][number];
-
-/** Thrown when a message has no content class, which cancels compaction rather than guessing. */
-export class CliffMessageMappingError extends Error {
-  override readonly name = "CliffMessageMappingError";
-}
 
 type PiUserMessage = Extract<PiAgentMessage, { role: "user" }>;
 type PiAssistantMessage = Extract<PiAgentMessage, { role: "assistant" }>;
