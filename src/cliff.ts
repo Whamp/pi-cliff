@@ -6,11 +6,13 @@
  * units always render to the same bytes.
  */
 
+import { CliffCanonicalizationError } from "./errors.js";
+
 /**
  * Marker that opens every Cliff summary, and the token by which an earlier summary is recognised.
  *
  * Byte-exact upstream `SUMMARY_HEADER` (`dialects/base.py`), which upstream documents as frozen:
- * changing a byte breaks recognition of summaries written by earlier versions. `test/cliff.test.ts`
+ * changing a byte breaks recognition of summaries written by earlier versions. `cliff.test.ts`
  * proves byte-exactness against text produced by upstream's own `compact()`.
  */
 export const SUMMARY_HEADER =
@@ -326,11 +328,6 @@ export function canonicalJson(value: CliffJsonValue): string {
       );
     }
   }
-}
-
-/** Thrown when a tool-call value has no faithful JSON text, which cancels compaction upstream-style. */
-export class CliffCanonicalizationError extends Error {
-  override readonly name = "CliffCanonicalizationError";
 }
 
 /**
